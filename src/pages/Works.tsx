@@ -3,6 +3,7 @@ import FileExplorer from '../components/FileExplorer';
 import MarkdownEditor from '../components/MarkdownEditor';
 import AgentChat from '../components/AgentChat';
 import { useSettingsStore } from '../stores/useSettingsStore';
+import { useWorksStore } from '../stores/useWorksStore';
 import { Button } from 'antd';
 import { RobotOutlined } from '@ant-design/icons';
 
@@ -10,22 +11,29 @@ const MIN_FILE_TREE_WIDTH = 250;
 const MAX_FILE_TREE_WIDTH = 420;
 const EDITOR_MIN_WIDTH = 400;
 const MIN_AGENT_WIDTH = 380;
-const DEFAULT_AGENT_WIDTH = 420;
 const MAX_AGENT_WIDTH = 860;
 
 const Works: React.FC = () => {
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  
-  const [fileTreeWidth, setFileTreeWidth] = useState(MIN_FILE_TREE_WIDTH);
   const [isResizingFileTree, setIsResizingFileTree] = useState(false);
-  
-  const [agentWidth, setAgentWidth] = useState(DEFAULT_AGENT_WIDTH);
   const [isResizingAgent, setIsResizingAgent] = useState(false);
-  const [isAgentVisible, setIsAgentVisible] = useState(true);
 
   const fileTreeRef = useRef<HTMLDivElement>(null);
   const worksDirectory = useSettingsStore(state => state.worksDirectory);
   const setWorksDirectory = useSettingsStore(state => state.setWorksDirectory);
+  const {
+    selectedFile,
+    setSelectedFile,
+    selectedDirectory,
+    setSelectedDirectory,
+    fileTreeWidth,
+    setFileTreeWidth,
+    agentWidth,
+    setAgentWidth,
+    isAgentVisible,
+    setIsAgentVisible,
+    expandedKeys,
+    setExpandedKeys,
+  } = useWorksStore();
 
   // Resize File Tree
   useEffect(() => {
@@ -83,8 +91,12 @@ const Works: React.FC = () => {
         }}>
           <FileExplorer
             onSelectFile={setSelectedFile}
+            selectedDirectory={selectedDirectory}
+            onSelectDirectory={setSelectedDirectory}
             workspacePath={worksDirectory}
             onChangeWorkspace={setWorksDirectory}
+            expandedKeys={expandedKeys}
+            onExpandedKeysChange={setExpandedKeys}
           />
           <div
             aria-label="调整文件树宽度"
@@ -149,7 +161,7 @@ const Works: React.FC = () => {
                 zIndex: 2,
               }}
             />
-            <AgentChat onClose={() => setIsAgentVisible(false)} />
+            <AgentChat title="写文章Agent" onClose={() => setIsAgentVisible(false)} />
           </div>
         )}
       </div>

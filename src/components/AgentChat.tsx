@@ -44,9 +44,10 @@ interface ModelMessage {
 
 interface AgentChatProps {
   onClose?: () => void;
+  title?: string;
 }
 
-const AgentChat: React.FC<AgentChatProps> = ({ onClose }) => {
+const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent' }) => {
   const {
     messages, setMessages,
     input, setInput,
@@ -67,6 +68,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose }) => {
   const chatHistoryRef = useRef<HTMLDivElement>(null);
   const [textareaScroll, setTextareaScroll] = useState(0);
 
+  const currentThinkingIdRef = useRef<string | null>(null);
   const activeRunRef = useRef(activeRun);
   const messagesRef = useRef(messages);
   const selectedLibraryIdsRef = useRef(selectedLibraryIds);
@@ -118,6 +120,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose }) => {
       }
 
       if (payload.eventType === 'delta' && payload.delta) {
+        currentThinkingIdRef.current = null;
         setMessages((prev) => prev.map((msg) => (
           msg.id === active.messageId
             ? { ...msg, content: msg.content + payload.delta }
@@ -127,15 +130,37 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose }) => {
       }
 
       if (payload.eventType === 'thinking_delta' && payload.delta) {
-        setMessages((prev) => prev.map((msg) => (
-          msg.id === active.messageId
-            ? { ...msg, thinking: `${msg.thinking ?? ''}${payload.delta}` }
-            : msg
-        )));
+        setMessages((prev) => prev.map((msg) => {
+          if (msg.id !== active.messageId) return msg;
+          let newContent = msg.content;
+          const newThinkingBlocks = [...(msg.thinkingBlocks ?? [])];
+          
+          if (!currentThinkingIdRef.current) {
+            currentThinkingIdRef.current = `thinking-${Date.now()}`;
+            newContent += `\n\n[[THINKING:${currentThinkingIdRef.current}]]\n\n`;
+            newThinkingBlocks.push({ id: currentThinkingIdRef.current, content: payload.delta! });
+          } else {
+            const blockIndex = newThinkingBlocks.findIndex(b => b.id === currentThinkingIdRef.current);
+            if (blockIndex >= 0) {
+              newThinkingBlocks[blockIndex] = {
+                ...newThinkingBlocks[blockIndex],
+                content: newThinkingBlocks[blockIndex].content + payload.delta!
+              };
+            }
+          }
+
+          return { 
+            ...msg, 
+            content: newContent, 
+            thinkingBlocks: newThinkingBlocks,
+            thinking: `${msg.thinking ?? ''}${payload.delta}` 
+          };
+        }));
         return;
       }
 
       if (payload.eventType === 'tool_start') {
+        currentThinkingIdRef.current = null;
         const toolId = payload.toolCallId || `tool-${Date.now()}`;
         setMessages((prev) => {
           const next = updateMessageTool(prev, active.messageId!, {
@@ -174,6 +199,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose }) => {
       }
 
       if (payload.eventType === 'error') {
+        currentThinkingIdRef.current = null;
         setMessages((prev) => prev.map((msg) => (
           msg.id === active.messageId
             ? { ...msg, content: payload.message ? `请求模型失败：${payload.message}` : '请求模型失败' }
@@ -186,6 +212,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose }) => {
       }
 
       if (payload.eventType === 'done') {
+        currentThinkingIdRef.current = null;
         activeRunRef.current = { runId: null, messageId: null };
         setActiveRun({ runId: null, messageId: null });
         setIsStreaming(false);
@@ -271,9 +298,10 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose }) => {
           baseUrl: settings.llmBaseUrl,
           apiKey: settings.llmApiKey,
           model: settings.llmModel,
-          temperature: settings.temperature,
-          maxOutputTokens: settings.maxOutputTokens,
-          maxContextTokens: settings.maxContextTokens,
+          temperature: settings.agentConfigs?.writer?.temperature ?? settings.temperature,
+          maxOutputTokens: settings.agentConfigs?.writer?.maxOutputTokens ?? settings.maxOutputTokens,
+          maxContextTokens: settings.agentConfigs?.writer?.maxContextTokens ?? settings.maxContextTokens,
+          thinkingDepth: settings.agentConfigs?.writer?.thinkingDepth ?? settings.thinkingDepth,
           systemPrompt: settings.systemPrompt,
           workspacePath: settings.worksDirectory,
           messages: buildModelMessages(messages.concat(userMessage), userMessage.id, mentionedSkills),
@@ -382,19 +410,46 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose }) => {
 
   const contextTooltip = (
     <div className="agent-context-popover">
-      <strong>上下文详情</strong>
-      <span>模型：{settings.llmModel || '未设置'}</span>
-      <span style={{ display: 'flex', wordBreak: 'break-all' }}>
-        <span style={{ flexShrink: 0 }}>工作空间：</span>
-        <span>{settings.worksDirectory || '未选择'}</span>
-      </span>
-      <span>范文库：{selectedLibNames || '未选择'}，首轮自动读取</span>
-      <span>消息：{messages.length} 条</span>
-      <span>总 token 数：{contextStats.total} / {settings.maxContextTokens || 0}</span>
-      <span>用户消息 token 数：{contextStats.user}</span>
-      <span>assistant 消息 token 数：{contextStats.assistant}</span>
-      <span>系统提示词 token 数：{contextStats.system}</span>
-      <span>tool 消息 token 数：{contextStats.tool}</span>
+      <div className="agent-context-popover__header">
+        <strong>上下文详情</strong>
+      </div>
+      <div className="agent-context-popover__row">
+        <span className="agent-context-popover__label">模型：</span>
+        <span className="agent-context-popover__value">{settings.llmModel || '未设置'}</span>
+      </div>
+      <div className="agent-context-popover__row">
+        <span className="agent-context-popover__label">工作空间：</span>
+        <span className="agent-context-popover__value" style={{ wordBreak: 'break-all' }}>{settings.worksDirectory || '未选择'}</span>
+      </div>
+      <div className="agent-context-popover__row">
+        <span className="agent-context-popover__label">范文库：</span>
+        <span className="agent-context-popover__value">{selectedLibNames || '未选择'}</span>
+      </div>
+      <div className="agent-context-popover__divider" />
+      <div className="agent-context-popover__row">
+        <span className="agent-context-popover__label">消息数：</span>
+        <span className="agent-context-popover__value">{messages.length} 条</span>
+      </div>
+      <div className="agent-context-popover__row">
+        <span className="agent-context-popover__label">总 token：</span>
+        <span className="agent-context-popover__value agent-context-popover__value--highlight">{contextStats.total} / {settings.maxContextTokens || 0}</span>
+      </div>
+      <div className="agent-context-popover__row">
+        <span className="agent-context-popover__label">用户消息：</span>
+        <span className="agent-context-popover__value">{contextStats.user}</span>
+      </div>
+      <div className="agent-context-popover__row">
+        <span className="agent-context-popover__label">AI 回复：</span>
+        <span className="agent-context-popover__value">{contextStats.assistant}</span>
+      </div>
+      <div className="agent-context-popover__row">
+        <span className="agent-context-popover__label">系统设定：</span>
+        <span className="agent-context-popover__value">{contextStats.system}</span>
+      </div>
+      <div className="agent-context-popover__row">
+        <span className="agent-context-popover__label">工具消耗：</span>
+        <span className="agent-context-popover__value">{contextStats.tool}</span>
+      </div>
     </div>
   );
 
@@ -403,7 +458,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose }) => {
       <div className="agent-chat__header">
         <div className="agent-chat__title">
           <RobotOutlined />
-          <h3>{sessionTitle}</h3>
+          <h3>{title}</h3>
         </div>
         <div className="agent-chat__header-actions">
           <Tooltip title="新建 Session">
@@ -450,9 +505,10 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose }) => {
             key={msg.id}
           >
             <div className={`agent-message-bubble agent-message-bubble--${msg.role}`}>
-              {msg.thinking && (
+              {msg.thinking && (!msg.thinkingBlocks || msg.thinkingBlocks.length === 0) && (
                 <FoldBlock
                   icon={<BulbOutlined />}
+                  variant="thinking"
                   title="思考"
                   preview={msg.thinking}
                   expanded={Boolean(expandedBlocks[`${msg.id}-thinking`])}
@@ -461,13 +517,13 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose }) => {
               )}
 
               {(() => {
-                const parts = msg.content ? msg.content.split(/(\[\[TOOL:[^\]]+\]\])/) : [msg.role === 'agent' && isStreaming ? ' ' : ''];
+                const parts = msg.content ? msg.content.split(/(\[\[(?:TOOL|THINKING):[^\]]+\]\])/) : [msg.role === 'agent' && isStreaming ? ' ' : ''];
                 const renderedToolIds = new Set<string>();
                 
                 const renderedParts = parts.map((part, i) => {
-                  const match = part.match(/^\[\[TOOL:([^\]]+)\]\]$/);
-                  if (match) {
-                    const toolId = match[1];
+                  const toolMatch = part.match(/^\[\[TOOL:([^\]]+)\]\]$/);
+                  if (toolMatch) {
+                    const toolId = toolMatch[1];
                     const toolIndex = msg.tools?.findIndex(t => t.id === toolId);
                     if (toolIndex !== undefined && toolIndex >= 0) {
                       const tool = msg.tools![toolIndex];
@@ -475,11 +531,32 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose }) => {
                       return (
                         <FoldBlock
                           icon={<ToolOutlined />}
+                          variant="tool"
                           key={`tool-${tool.id || i}`}
                           title={`工具：${tool.name}`}
                           preview={tool.result}
                           expanded={Boolean(expandedBlocks[`${msg.id}-tool-${toolIndex}`])}
                           onToggle={() => toggleBlock(`${msg.id}-tool-${toolIndex}`)}
+                        />
+                      );
+                    }
+                    return null;
+                  }
+
+                  const thinkingMatch = part.match(/^\[\[THINKING:([^\]]+)\]\]$/);
+                  if (thinkingMatch) {
+                    const thinkingId = thinkingMatch[1];
+                    const block = msg.thinkingBlocks?.find(b => b.id === thinkingId);
+                    if (block) {
+                      return (
+                        <FoldBlock
+                          icon={<BulbOutlined />}
+                          variant="thinking"
+                          key={`thinking-${thinkingId}`}
+                          title="思考"
+                          preview={block.content}
+                          expanded={Boolean(expandedBlocks[`${msg.id}-thinking-${thinkingId}`])}
+                          onToggle={() => toggleBlock(`${msg.id}-thinking-${thinkingId}`)}
                         />
                       );
                     }
@@ -516,6 +593,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose }) => {
                   return (
                     <FoldBlock
                       icon={<ToolOutlined />}
+                      variant="tool"
                       key={`unrendered-tool-${index}`}
                       title={`工具：${tool.name}`}
                       preview={tool.result}
@@ -663,7 +741,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose }) => {
               value={selectedLibraryIds}
             />
             <div className="agent-send-cluster">
-              <Tooltip color="#fff" placement="topRight" title={contextTooltip}>
+              <Tooltip color="#fff" placement="topRight" title={contextTooltip} overlayInnerStyle={{ width: 'max-content', maxWidth: 320, padding: '8px 12px' }}>
                 <button
                   aria-label="查看上下文详情"
                   className="agent-context-ring"
@@ -696,15 +774,17 @@ function FoldBlock({
   preview,
   expanded,
   onToggle,
+  variant = 'tool',
 }: {
   icon: React.ReactNode;
   title: string;
   preview: string;
   expanded: boolean;
   onToggle: () => void;
+  variant?: 'tool' | 'thinking';
 }) {
   return (
-    <div className="agent-fold-block">
+    <div className={`agent-fold-block agent-fold-block--${variant}`}>
       <button className="agent-fold-block__summary" onClick={onToggle} type="button">
         <span className="agent-fold-block__title">{icon}{title}</span>
         <span className="agent-fold-block__preview">{preview || '暂无内容'}</span>
@@ -733,13 +813,14 @@ function updateMessageTool(
     }
 
     const current = tools[index];
+    const prevResult = current.result === '正在执行工具' ? '' : current.result;
     tools[index] = {
       ...current,
       name: tool.name || current.name,
       status: tool.status || current.status,
       arguments: tool.arguments || current.arguments,
       result: mode === 'output'
-        ? `${current.result}${tool.result ? `\n${tool.result}` : ''}`
+        ? `${prevResult}${tool.result}`
         : tool.result || current.result,
     };
     return { ...msg, tools };

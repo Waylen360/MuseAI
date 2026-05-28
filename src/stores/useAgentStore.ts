@@ -8,11 +8,17 @@ export interface AgentToolEntry {
   arguments?: string;
 }
 
+export interface ThinkingBlock {
+  id: string;
+  content: string;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'agent';
   content: string;
   thinking?: string;
+  thinkingBlocks?: ThinkingBlock[];
   tools?: AgentToolEntry[];
 }
 

@@ -3,7 +3,12 @@ import { Form, Input, Button, InputNumber, Divider, List, Typography, Popconfirm
 import { DeleteOutlined, FolderOpenOutlined, CodeOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import { useSettingsStore, SettingsState, defaultSystemPrompt } from '../stores/useSettingsStore';
+import {
+  useSettingsStore,
+  defaultSystemPrompt,
+  defaultDeAiDetectorPrompt,
+  defaultDeAiRemoverPrompt,
+} from '../stores/useSettingsStore';
 
 interface SkillDefinition {
   name: string;
@@ -54,29 +59,93 @@ const Settings: React.FC = () => {
 
   const [skills, setSkills] = React.useState<SkillDefinition[]>([]);
   const [importingSkill, setImportingSkill] = React.useState(false);
+  const [selectedAgentId, setSelectedAgentId] = React.useState<string>('global');
+
+  const agentOptions = [
+    { value: 'global', label: '全局默认配置' },
+    { value: 'writer', label: '写文章Agent' },
+    { value: 'detector', label: '检测AI味Agent' },
+    { value: 'remover', label: '去除AI味Agent' },
+  ];
 
   React.useEffect(() => {
     invoke<SkillDefinition[]>('get_skills').then(setSkills).catch(console.error);
   }, []);
 
   React.useEffect(() => {
-    modelForm.setFieldsValue(store);
-    promptForm.setFieldsValue({ systemPrompt: store.systemPrompt || defaultSystemPrompt });
-  }, [store, modelForm, promptForm]);
+    if (selectedAgentId === 'global') {
+      modelForm.setFieldsValue(store);
+    } else {
+      const agentConfig = store.agentConfigs?.[selectedAgentId] || {};
+      modelForm.setFieldsValue({
+        ...store,
+        temperature: agentConfig.temperature ?? store.temperature,
+        maxOutputTokens: agentConfig.maxOutputTokens ?? store.maxOutputTokens,
+        maxContextTokens: agentConfig.maxContextTokens ?? store.maxContextTokens,
+        thinkingDepth: agentConfig.thinkingDepth ?? store.thinkingDepth,
+      });
+    }
+    
+    promptForm.setFieldsValue({
+      systemPrompt: store.systemPrompt || defaultSystemPrompt,
+      deAiDetectorPrompt: store.deAiDetectorPrompt || defaultDeAiDetectorPrompt,
+      deAiRemoverPrompt: store.deAiRemoverPrompt || defaultDeAiRemoverPrompt,
+    });
+  }, [store, modelForm, promptForm, selectedAgentId]);
 
-  // Handle Model Config Save
-  const handleSaveModelConfig = (values: Partial<SettingsState>) => {
-    store.setLlmConfig(values);
+  const handleSaveModelConfig = (values: any) => {
+    if (selectedAgentId === 'global') {
+      store.setLlmConfig(values);
+    } else {
+      store.setLlmConfig({
+        llmProvider: values.llmProvider,
+        modelInterface: values.modelInterface,
+        llmModel: values.llmModel,
+        llmBaseUrl: values.llmBaseUrl,
+        llmApiKey: values.llmApiKey,
+      });
+      store.setAgentConfig(selectedAgentId, {
+        temperature: values.temperature,
+        maxOutputTokens: values.maxOutputTokens,
+        maxContextTokens: values.maxContextTokens,
+        thinkingDepth: values.thinkingDepth,
+      });
+    }
+    message.success('已保存模型配置');
   };
 
-  // Handle Prompt Save
-  const handleSavePrompt = (values: { systemPrompt: string }) => {
-    store.setSystemPrompt(values.systemPrompt);
+  const promptActions = {
+    systemPrompt: {
+      save: () => store.setSystemPrompt(promptForm.getFieldValue('systemPrompt')),
+      reset: () => {
+        promptForm.setFieldsValue({ systemPrompt: defaultSystemPrompt });
+        store.resetSystemPrompt();
+      },
+    },
+    deAiDetectorPrompt: {
+      save: () => store.setDeAiDetectorPrompt(promptForm.getFieldValue('deAiDetectorPrompt')),
+      reset: () => {
+        promptForm.setFieldsValue({ deAiDetectorPrompt: defaultDeAiDetectorPrompt });
+        store.resetDeAiDetectorPrompt();
+      },
+    },
+    deAiRemoverPrompt: {
+      save: () => store.setDeAiRemoverPrompt(promptForm.getFieldValue('deAiRemoverPrompt')),
+      reset: () => {
+        promptForm.setFieldsValue({ deAiRemoverPrompt: defaultDeAiRemoverPrompt });
+        store.resetDeAiRemoverPrompt();
+      },
+    },
   };
 
-  const handleResetPrompt = () => {
-    promptForm.setFieldsValue({ systemPrompt: defaultSystemPrompt });
-    store.resetSystemPrompt();
+  const handleSavePrompt = (field: keyof typeof promptActions) => {
+    promptActions[field].save();
+    message.success('已保存提示词');
+  };
+
+  const handleResetPrompt = (field: keyof typeof promptActions) => {
+    promptActions[field].reset();
+    message.success('已恢复默认提示词');
   };
 
   const handleSelectLibraryPath = async () => {
@@ -135,7 +204,7 @@ const Settings: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', height: '100%', overflow: 'hidden', background: '#faf9f5' }}>
       <div style={{ width: 180, padding: '40px 0 40px 24px', borderRight: '1px solid #eae6df', overflowY: 'auto', flexShrink: 0 }}>
         <Anchor
           affix={false}
@@ -204,10 +273,20 @@ const Settings: React.FC = () => {
               marginTop: 32, 
               paddingTop: 24, 
               borderTop: '1px dashed #eae6df',
-              display: 'flex', 
-              justifyContent: 'space-between',
+              display: 'flex',
+              flexDirection: 'column',
               gap: '16px' 
             }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+                <Text strong>针对指定Agent进行配置 (仅限以下四个参数)：</Text>
+                <Select
+                  value={selectedAgentId}
+                  onChange={setSelectedAgentId}
+                  options={agentOptions}
+                  style={{ width: 160 }}
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
               <Form.Item label="温度 (Temperature)" name="temperature" style={{ flex: 1, whiteSpace: 'nowrap' }}>
                 <InputNumber min={0} max={2} step={0.1} style={{ width: '100%', maxWidth: 160 }} />
               </Form.Item>
@@ -223,6 +302,7 @@ const Settings: React.FC = () => {
                   options={effortLevelOptions.map((opt) => ({ value: opt.id, label: opt.label }))}
                 />
               </Form.Item>
+            </div>
             </div>
 
             <Form.Item style={{ marginTop: 24 }}>
@@ -241,26 +321,82 @@ const Settings: React.FC = () => {
           <Form
             form={promptForm}
             layout="vertical"
-            initialValues={{ systemPrompt: store.systemPrompt || defaultSystemPrompt }}
-            onFinish={handleSavePrompt}
+            initialValues={{
+              systemPrompt: store.systemPrompt || defaultSystemPrompt,
+              deAiDetectorPrompt: store.deAiDetectorPrompt || defaultDeAiDetectorPrompt,
+              deAiRemoverPrompt: store.deAiRemoverPrompt || defaultDeAiRemoverPrompt,
+            }}
           >
-            <Form.Item name="systemPrompt" help="此提示词将作为 Agent 初始化时的核心设定。">
-              <TextArea 
-                rows={9} 
-                placeholder="请输入自定义的系统提示词..."
-                style={{ resize: 'none', backgroundColor: '#faf9f5', border: '1px solid #eae6df' }} 
-              />
-            </Form.Item>
-            <Form.Item style={{ marginTop: 24 }}>
-              <div style={{ display: 'flex', gap: 12 }}>
-                <Button type="primary" htmlType="submit" size="large">
-                  保存提示词
-                </Button>
-                <Button size="large" onClick={handleResetPrompt}>
-                  恢复默认
-                </Button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 40 }}>
+              <div>
+                <Form.Item
+                  label="写文章Agent"
+                  name="systemPrompt"
+                  help="此提示词将作为作品页写文章Agent初始化时的核心设定。"
+                  style={{ marginBottom: 16 }}
+                >
+                  <TextArea 
+                    rows={9} 
+                    placeholder="请输入写文章Agent的系统提示词..."
+                    style={{ resize: 'none', backgroundColor: '#faf9f5', border: '1px solid #eae6df' }} 
+                  />
+                </Form.Item>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <Button type="primary" size="large" onClick={() => handleSavePrompt('systemPrompt')}>
+                    保存提示词
+                  </Button>
+                  <Button size="large" onClick={() => handleResetPrompt('systemPrompt')}>
+                    恢复默认
+                  </Button>
+                </div>
               </div>
-            </Form.Item>
+
+              <div>
+                <Form.Item
+                  label="检测AI味Agent"
+                  name="deAiDetectorPrompt"
+                  help="此提示词将作为去AI味页面检测AI味Agent的核心设定。"
+                  style={{ marginBottom: 16 }}
+                >
+                  <TextArea 
+                    rows={7} 
+                    placeholder="请输入检测AI味Agent的系统提示词..."
+                    style={{ resize: 'none', backgroundColor: '#faf9f5', border: '1px solid #eae6df' }} 
+                  />
+                </Form.Item>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <Button type="primary" size="large" onClick={() => handleSavePrompt('deAiDetectorPrompt')}>
+                    保存提示词
+                  </Button>
+                  <Button size="large" onClick={() => handleResetPrompt('deAiDetectorPrompt')}>
+                    恢复默认
+                  </Button>
+                </div>
+              </div>
+
+              <div>
+                <Form.Item
+                  label="去除AI味Agent"
+                  name="deAiRemoverPrompt"
+                  help="此提示词将作为去AI味页面去除AI味Agent的核心设定。"
+                  style={{ marginBottom: 16 }}
+                >
+                  <TextArea 
+                    rows={7} 
+                    placeholder="请输入去除AI味Agent的系统提示词..."
+                    style={{ resize: 'none', backgroundColor: '#faf9f5', border: '1px solid #eae6df' }} 
+                  />
+                </Form.Item>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <Button type="primary" size="large" onClick={() => handleSavePrompt('deAiRemoverPrompt')}>
+                  保存提示词
+                  </Button>
+                  <Button size="large" onClick={() => handleResetPrompt('deAiRemoverPrompt')}>
+                    恢复默认
+                  </Button>
+                </div>
+              </div>
+            </div>
           </Form>
         </section>
 

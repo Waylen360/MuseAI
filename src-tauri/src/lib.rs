@@ -1,3 +1,6 @@
+mod crawler;
+mod fs_commands;
+use base64::{engine::general_purpose, Engine as _};
 use futures_util::{future::BoxFuture, StreamExt};
 use glob::glob;
 use regex::Regex;
@@ -15,8 +18,16 @@ use std::thread;
 use std::time::UNIX_EPOCH;
 use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 use walkdir::WalkDir;
+
+static BASH_PERMISSION_CHANNELS: OnceLock<Mutex<HashMap<String, oneshot::Sender<bool>>>> =
+    OnceLock::new();
+
+fn bash_permission_channels() -> &'static Mutex<HashMap<String, oneshot::Sender<bool>>> {
+    BASH_PERMISSION_CHANNELS.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 struct ActiveStreams(Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>);
 
@@ -41,6 +52,21 @@ pub struct BashToolResult {
     stderr: String,
     exit_code: Option<i32>,
     timed_out: bool,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionInfo {
+    id: String,
+    timestamp: u64,
+    ai_score: Option<u32>,
+    suggestion: Option<String>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileVersionsMetadata {
+    versions: Vec<VersionInfo>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -85,11 +111,14 @@ pub struct ChatStreamRequest {
     temperature: Option<f32>,
     max_output_tokens: Option<u32>,
     max_context_tokens: Option<u32>,
+    thinking_depth: Option<String>,
     system_prompt: String,
     workspace_path: Option<String>,
     messages: Vec<ChatMessage>,
     reference_libraries: Option<Vec<ChatReferenceLibrary>>,
     selected_reference_library_ids: Option<Vec<String>>,
+    allowed_tools: Option<Vec<String>>,
+    allowed_write_paths: Option<Vec<String>>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -175,6 +204,16 @@ const MAX_SUBAGENT_OUTPUT_CHARS: usize = 5_000;
 const DEFAULT_BASH_TIMEOUT_SECS: u64 = 120;
 const MAX_BASH_TIMEOUT_SECS: u64 = 600;
 
+fn is_supported_content_file(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .as_deref(),
+        Some("md" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg")
+    )
+}
+
 #[tauri::command]
 fn list_dir(path: String) -> Result<Vec<FileNode>, String> {
     let mut nodes = Vec::new();
@@ -193,7 +232,13 @@ fn list_dir(path: String) -> Result<Vec<FileNode>, String> {
                         .file_name()
                         .into_string()
                         .unwrap_or_else(|_| String::from("unknown"));
+                    if name.starts_with('.') {
+                        continue;
+                    }
                     let is_dir = path_buf.is_dir();
+                    if !is_dir && !is_supported_content_file(&path_buf) {
+                        continue;
+                    }
 
                     nodes.push(FileNode {
                         name,
@@ -216,9 +261,103 @@ fn read_file(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn write_file(path: String, content: String) -> Result<u64, String> {
+fn read_image_data_url(path: String) -> Result<String, String> {
+    let path = Path::new(&path);
+    if !is_supported_content_file(path)
+        || path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("md"))
+            .unwrap_or(false)
+    {
+        return Err("仅支持图片文件预览".to_string());
+    }
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    let mime = match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("bmp") => "image/bmp",
+        Some("svg") => "image/svg+xml",
+        _ => return Err("不支持的图片格式".to_string()),
+    };
+    Ok(format!(
+        "data:{};base64,{}",
+        mime,
+        general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+#[tauri::command]
+fn write_file(app: tauri::AppHandle, path: String, content: String) -> Result<u64, String> {
     fs::write(&path, content).map_err(|e| e.to_string())?;
+    let _ = app.emit("workspace-changed", ());
     file_modified_at(path)
+}
+
+#[tauri::command]
+fn create_file(app: tauri::AppHandle, path: String) -> Result<u64, String> {
+    let path = Path::new(&path);
+    if path.exists() {
+        return Err("文件已存在".to_string());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(path, "").map_err(|e| e.to_string())?;
+    let _ = app.emit("workspace-changed", ());
+    file_modified_at(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn create_dir(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let path = Path::new(&path);
+    if path.exists() {
+        return Err("文件夹已存在".to_string());
+    }
+    fs::create_dir_all(path).map_err(|e| e.to_string())?;
+    let _ = app.emit("workspace-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+fn rename_path(app: tauri::AppHandle, path: String, new_name: String) -> Result<String, String> {
+    let source = Path::new(&path);
+    if !source.exists() {
+        return Err("文件或文件夹不存在".to_string());
+    }
+    if new_name.trim().is_empty() || new_name.contains('/') || new_name.contains('\\') {
+        return Err("名称不合法".to_string());
+    }
+    let parent = source.parent().ok_or("无法获取上级目录")?;
+    let target = parent.join(new_name.trim());
+    if target.exists() {
+        return Err("同名文件或文件夹已存在".to_string());
+    }
+    fs::rename(source, &target).map_err(|e| e.to_string())?;
+    let _ = app.emit("workspace-changed", ());
+    Ok(target.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn delete_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let target = Path::new(&path);
+    if !target.exists() {
+        return Ok(());
+    }
+    if target.is_dir() {
+        fs::remove_dir_all(target).map_err(|e| e.to_string())?;
+    } else {
+        fs::remove_file(target).map_err(|e| e.to_string())?;
+    }
+    let _ = app.emit("workspace-changed", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -242,9 +381,9 @@ fn greet(name: &str) -> String {
 }
 
 #[tauri::command]
-fn tool_read(file_path: String, offset: Option<usize>, limit: Option<usize>) -> ToolResult {
+fn tool_read(file_path: String, offset: Option<usize>, limit: Option<usize>, workspace: Option<String>) -> ToolResult {
     match read_file_with_lines(
-        &file_path,
+        &expand_path(workspace.as_deref(), &file_path).to_string_lossy(),
         offset.unwrap_or(1),
         limit.unwrap_or(MAX_READ_LINES),
     ) {
@@ -260,14 +399,15 @@ fn tool_read(file_path: String, offset: Option<usize>, limit: Option<usize>) -> 
 }
 
 #[tauri::command]
-fn tool_write(file_path: String, content: String) -> ToolResult {
-    let path = expand_path(&file_path);
+fn tool_write(app: tauri::AppHandle, file_path: String, content: String, workspace: Option<String>) -> ToolResult {
+    let path = expand_path(workspace.as_deref(), &file_path);
     let result = (|| -> Result<String, String> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
 
         fs::write(&path, &content).map_err(|e| e.to_string())?;
+        let _ = app.emit("workspace-changed", ());
         let line_count = count_lines(&content);
         Ok(format!("Wrote {} lines to {}", line_count, path.display()))
     })();
@@ -276,8 +416,8 @@ fn tool_write(file_path: String, content: String) -> ToolResult {
 }
 
 #[tauri::command]
-fn tool_edit(file_path: String, old_string: String, new_string: String) -> ToolResult {
-    let path = expand_path(&file_path);
+fn tool_edit(app: tauri::AppHandle, file_path: String, old_string: String, new_string: String, workspace: Option<String>) -> ToolResult {
+    let path = expand_path(workspace.as_deref(), &file_path);
     let result = (|| -> Result<String, String> {
         if !path.exists() {
             return Err(format!("Error: {} not found", path.display()));
@@ -306,6 +446,7 @@ fn tool_edit(file_path: String, old_string: String, new_string: String) -> ToolR
 
         let new_content = content.replacen(&old_string, &new_string, 1);
         fs::write(&path, &new_content).map_err(|e| e.to_string())?;
+        let _ = app.emit("workspace-changed", ());
         Ok(format!(
             "Edited {}\n{}",
             path.display(),
@@ -317,7 +458,32 @@ fn tool_edit(file_path: String, old_string: String, new_string: String) -> ToolR
 }
 
 #[tauri::command]
-fn tool_bash(command: String, cwd: Option<String>, timeout_secs: Option<u64>) -> BashToolResult {
+async fn resolve_bash_permission(request_id: String, approved: bool) -> Result<(), String> {
+    if let Some(sender) = bash_permission_channels()
+        .lock()
+        .unwrap()
+        .remove(&request_id)
+    {
+        let _ = sender.send(approved);
+    }
+    Ok(())
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BashPermissionRequestPayload {
+    pub request_id: String,
+    pub command: String,
+}
+
+#[tauri::command]
+async fn tool_bash(
+    app: tauri::AppHandle,
+    command: String,
+    cwd: Option<String>,
+    timeout_secs: Option<u64>,
+    workspace: Option<String>,
+) -> BashToolResult {
     if let Some(reason) = dangerous_command_reason(&command) {
         return BashToolResult {
             success: false,
@@ -326,6 +492,43 @@ fn tool_bash(command: String, cwd: Option<String>, timeout_secs: Option<u64>) ->
                 "Blocked: {}\nCommand: {}\nIf intentional, make the command more specific.",
                 reason, command
             ),
+            exit_code: None,
+            timed_out: false,
+        };
+    }
+
+    if let Some(reason) = avoid_command_reason(&command) {
+        return BashToolResult {
+            success: false,
+            stdout: String::new(),
+            stderr: format!(
+                "Blocked: {}\nCommand: {}\nPlease use the appropriate dedicated tool instead.",
+                reason, command
+            ),
+            exit_code: None,
+            timed_out: false,
+        };
+    }
+
+    let request_id = Uuid::new_v4().to_string();
+    let (tx, rx) = oneshot::channel();
+    bash_permission_channels()
+        .lock()
+        .unwrap()
+        .insert(request_id.clone(), tx);
+
+    let payload = BashPermissionRequestPayload {
+        request_id,
+        command: command.clone(),
+    };
+    let _ = app.emit("bash-permission-request", payload);
+
+    let approved = rx.await.unwrap_or(false);
+    if !approved {
+        return BashToolResult {
+            success: false,
+            stdout: String::new(),
+            stderr: String::from("User denied permission to run this command."),
             exit_code: None,
             timed_out: false,
         };
@@ -342,7 +545,7 @@ fn tool_bash(command: String, cwd: Option<String>, timeout_secs: Option<u64>) ->
         .stderr(Stdio::piped());
 
     if let Some(cwd) = cwd {
-        child_command.current_dir(expand_path(&cwd));
+        child_command.current_dir(expand_path(workspace.as_deref(), &cwd));
     }
 
     let mut child = match child_command.spawn() {
@@ -407,6 +610,12 @@ fn tool_bash(command: String, cwd: Option<String>, timeout_secs: Option<u64>) ->
 
     let status = child.wait().ok();
     let exit_code = status.and_then(|status| status.code());
+    
+    // Commands like `touch` or `mkdir` might have modified the workspace
+    if exit_code == Some(0) {
+        let _ = app.emit("workspace-changed", ());
+    }
+
     BashToolResult {
         success: exit_code == Some(0),
         stdout,
@@ -417,10 +626,10 @@ fn tool_bash(command: String, cwd: Option<String>, timeout_secs: Option<u64>) ->
 }
 
 #[tauri::command]
-fn tool_grep(pattern: String, path: Option<String>, include: Option<String>) -> ToolResult {
+fn tool_grep(pattern: String, path: Option<String>, include: Option<String>, workspace: Option<String>) -> ToolResult {
     let result = (|| -> Result<String, String> {
         let regex = Regex::new(&pattern).map_err(|e| format!("Invalid regex: {}", e))?;
-        let base = expand_path(path.as_deref().unwrap_or("."));
+        let base = expand_path(workspace.as_deref(), path.as_deref().unwrap_or("."));
         if !base.exists() {
             return Err(format!("Error: {} not found", base.display()));
         }
@@ -453,9 +662,9 @@ fn tool_grep(pattern: String, path: Option<String>, include: Option<String>) -> 
 }
 
 #[tauri::command]
-fn tool_glob(pattern: String, path: Option<String>) -> ToolResult {
+fn tool_glob(pattern: String, path: Option<String>, workspace: Option<String>) -> ToolResult {
     let result = (|| -> Result<String, String> {
-        let base = expand_path(path.as_deref().unwrap_or("."));
+        let base = expand_path(workspace.as_deref(), path.as_deref().unwrap_or("."));
         if !base.is_dir() {
             return Err(format!("Error: {} is not a directory", base.display()));
         }
@@ -692,7 +901,8 @@ fn save_agent_session(
 #[tauri::command]
 async fn summarize_text(request: SummarizeRequest) -> Result<String, String> {
     let client = reqwest::Client::new();
-    let system_prompt = "请用不超过8个字的简短标题概括用户提供的文本，只返回标题本身，不要加引号、标点或其他格式。";
+    let system_prompt =
+        "请用不超过8个字的简短标题概括用户提供的文本，只返回标题本身，不要加引号、标点或其他格式。";
     let max_tokens = request.max_output_tokens.unwrap_or(64).min(128);
 
     match request.model_interface.as_str() {
@@ -726,12 +936,17 @@ async fn summarize_text(request: SummarizeRequest) -> Result<String, String> {
             let content = json
                 .get("content")
                 .and_then(|c| c.as_array())
-                .and_then(|arr| arr.iter().find(|item| item.get("type") == Some(&json!("text"))))
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|item| item.get("type") == Some(&json!("text")))
+                })
                 .and_then(|text_block| text_block.get("text"))
                 .and_then(|t| t.as_str())
                 .unwrap_or("")
                 .trim()
-                .trim_matches(|c| c == '"' || c == '\'' || c == '「' || c == '」' || c == '『' || c == '』')
+                .trim_matches(|c| {
+                    c == '"' || c == '\'' || c == '「' || c == '」' || c == '『' || c == '』'
+                })
                 .to_string();
 
             if content.is_empty() {
@@ -777,7 +992,9 @@ async fn summarize_text(request: SummarizeRequest) -> Result<String, String> {
                 .and_then(|c| c.as_str())
                 .unwrap_or("")
                 .trim()
-                .trim_matches(|c| c == '"' || c == '\'' || c == '「' || c == '」' || c == '『' || c == '』')
+                .trim_matches(|c| {
+                    c == '"' || c == '\'' || c == '「' || c == '」' || c == '『' || c == '』'
+                })
                 .to_string();
 
             if content.is_empty() {
@@ -838,22 +1055,22 @@ fn start_chat_completion_stream(
             "start",
             None,
             Some("开始生成回复".to_string()),
+            &AgentRunOptions::parent(),
         );
+
+        let mut options = AgentRunOptions::parent();
+        options.allowed_tools = request.allowed_tools.clone();
 
         let result = match request.model_interface.as_str() {
             "Anthropic-compatible" => {
-                run_anthropic_agent_loop(&app, &spawned_run_id, &request, AgentRunOptions::parent())
-                    .await
+                run_anthropic_agent_loop(&app, &spawned_run_id, &request, options).await
             }
-            _ => {
-                run_openai_agent_loop(&app, &spawned_run_id, &request, AgentRunOptions::parent())
-                    .await
-            }
+            _ => run_openai_agent_loop(&app, &spawned_run_id, &request, options).await,
         };
 
         match result {
-            Ok(_) => emit_chat_event(&app, &spawned_run_id, "done", None, None),
-            Err(error) => emit_chat_event(&app, &spawned_run_id, "error", None, Some(error)),
+            Ok(_) => emit_chat_event(&app, &spawned_run_id, "done", None, None, &AgentRunOptions::parent()),
+            Err(error) => emit_chat_event(&app, &spawned_run_id, "error", None, Some(error), &AgentRunOptions::parent()),
         }
 
         if let Some(active_streams) = state_app.try_state::<ActiveStreams>() {
@@ -884,8 +1101,13 @@ async fn run_openai_agent_loop(
     let client = reqwest::Client::new();
     let endpoint = build_openai_endpoint(&request.base_url);
     let system_prompt = assemble_system_prompt(Some(app), request)?;
-    let mut messages = openai_history_messages(&system_prompt, &request.messages);
-    let tools = openai_tool_definitions(options.excluded_tools);
+    let history = trim_history_to_context_budget(
+        &system_prompt,
+        &request.messages,
+        request.max_context_tokens,
+    );
+    let mut messages = openai_history_messages(&system_prompt, &history);
+    let tools = openai_tool_definitions(&options);
 
     for round in 0..=options.max_tool_rounds {
         let mut body = json!({
@@ -913,7 +1135,7 @@ async fn run_openai_agent_loop(
             return Err(format!("OpenAI 兼容接口请求失败：{} {}", status, body));
         }
 
-        let stream_result = stream_openai_round(app, run_id, response, options.emit_events).await?;
+        let stream_result = stream_openai_round(app, run_id, response, &options).await?;
         if stream_result.tool_calls.is_empty() {
             return Ok(stream_result.content);
         }
@@ -949,7 +1171,7 @@ async fn run_openai_agent_loop(
                 app,
                 run_id,
                 request,
-                options,
+                options.clone(),
                 &call.id,
                 &call.name,
                 &call.arguments,
@@ -970,7 +1192,7 @@ async fn stream_openai_round(
     app: &AppHandle,
     run_id: &str,
     response: reqwest::Response,
-    emit_events: bool,
+    options: &AgentRunOptions,
 ) -> Result<OpenAiRoundResult, String> {
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
@@ -984,14 +1206,14 @@ async fn stream_openai_round(
             }
             if let Some(event) = parse_openai_stream_event(data) {
                 if let Some(reasoning) = event.reasoning_content {
-                    if emit_events {
-                        emit_chat_event(app, run_id, "thinking_delta", Some(reasoning), None);
+                    if options.emit_events {
+                        emit_chat_event(app, run_id, "thinking_delta", Some(reasoning), None, options);
                     }
                 }
                 if let Some(delta) = event.content {
                     result.content.push_str(&delta);
-                    if emit_events {
-                        emit_chat_event(app, run_id, "delta", Some(delta), None);
+                    if options.emit_events {
+                        emit_chat_event(app, run_id, "delta", Some(delta), None, options);
                     }
                 }
                 for chunk in event.tool_call_chunks {
@@ -1012,19 +1234,31 @@ async fn run_anthropic_agent_loop(
     let client = reqwest::Client::new();
     let endpoint = build_anthropic_endpoint(&request.base_url);
     let system_prompt = assemble_system_prompt(Some(app), request)?;
-    let mut messages = anthropic_history_messages(&request.messages);
-    let tools = anthropic_tool_definitions(options.excluded_tools);
+    let history = trim_history_to_context_budget(
+        &system_prompt,
+        &request.messages,
+        request.max_context_tokens,
+    );
+    let mut messages = anthropic_history_messages(&history);
+    let tools = anthropic_tool_definitions(&options);
 
     for round in 0..=options.max_tool_rounds {
-        let body = json!({
+        let max_tokens = request.max_output_tokens.unwrap_or(4096);
+        let mut body = json!({
             "model": request.model,
             "messages": messages,
             "system": system_prompt,
             "stream": true,
-            "temperature": request.temperature.unwrap_or(0.7),
-            "max_tokens": request.max_output_tokens.unwrap_or(4096),
+            "max_tokens": max_tokens,
             "tools": tools,
         });
+        if let Some(thinking) =
+            anthropic_thinking_config(request.thinking_depth.as_deref(), max_tokens)
+        {
+            body["thinking"] = thinking;
+        } else {
+            body["temperature"] = json!(request.temperature.unwrap_or(0.7));
+        }
 
         let response = client
             .post(&endpoint)
@@ -1042,7 +1276,7 @@ async fn run_anthropic_agent_loop(
         }
 
         let stream_result =
-            stream_anthropic_round(app, run_id, response, options.emit_events).await?;
+            stream_anthropic_round(app, run_id, response, &options).await?;
         if stream_result.tool_calls.is_empty() {
             return Ok(stream_result.content);
         }
@@ -1054,6 +1288,7 @@ async fn run_anthropic_agent_loop(
         }
 
         let mut assistant_content = Vec::new();
+        assistant_content.extend(stream_result.finalized_thinking_blocks());
         if !stream_result.content.trim().is_empty() {
             assistant_content.push(json!({ "type": "text", "text": stream_result.content }));
         }
@@ -1076,7 +1311,7 @@ async fn run_anthropic_agent_loop(
                 app,
                 run_id,
                 request,
-                options,
+                options.clone(),
                 &call.id,
                 &call.name,
                 &call.arguments,
@@ -1102,7 +1337,7 @@ async fn stream_anthropic_round(
     app: &AppHandle,
     run_id: &str,
     response: reqwest::Response,
-    emit_events: bool,
+    options: &AgentRunOptions,
 ) -> Result<AnthropicRoundResult, String> {
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
@@ -1115,14 +1350,24 @@ async fn stream_anthropic_round(
                 match event {
                     AnthropicStreamEvent::Text(delta) => {
                         result.content.push_str(&delta);
-                        if emit_events {
-                            emit_chat_event(app, run_id, "delta", Some(delta), None);
+                        if options.emit_events {
+                            emit_chat_event(app, run_id, "delta", Some(delta), None, options);
                         }
                     }
-                    AnthropicStreamEvent::Thinking(delta) => {
-                        if emit_events {
-                            emit_chat_event(app, run_id, "thinking_delta", Some(delta), None);
+                    AnthropicStreamEvent::ThinkingStart { index } => {
+                        result.start_thinking_block(index);
+                    }
+                    AnthropicStreamEvent::ThinkingDelta { index, thinking } => {
+                        result.push_thinking_delta(index, &thinking);
+                        if options.emit_events {
+                            emit_chat_event(app, run_id, "thinking_delta", Some(thinking), None, options);
                         }
+                    }
+                    AnthropicStreamEvent::ThinkingSignature { index, signature } => {
+                        result.set_thinking_signature(index, signature);
+                    }
+                    AnthropicStreamEvent::RedactedThinking { index, data } => {
+                        result.push_redacted_thinking(index, data);
                     }
                     AnthropicStreamEvent::ToolStart { index, id, name } => {
                         result.start_tool_call(index, id, name);
@@ -1146,7 +1391,35 @@ fn emit_chat_event(
     event_type: &str,
     delta: Option<String>,
     message: Option<String>,
+    options: &AgentRunOptions,
 ) {
+    if !options.emit_events {
+        return;
+    }
+    if let Some(parent_id) = &options.parent_tool_call_id {
+        if event_type == "delta" || event_type == "thinking_delta" || event_type == "error" {
+            let mut output_delta = delta.clone().unwrap_or_default();
+            if event_type == "error" {
+                output_delta = format!("\n[Agent出错: {}]\n", message.clone().unwrap_or_default());
+            }
+            let _ = app.emit(
+                "agent-chat-stream",
+                ChatStreamEvent {
+                    run_id: run_id.to_string(),
+                    event_type: "tool_output".to_string(),
+                    delta: Some(output_delta),
+                    message: None,
+                    tool_call_id: Some(parent_id.to_string()),
+                    tool_name: Some("subagent".to_string()),
+                    tool_status: Some("running".to_string()),
+                    tool_arguments: None,
+                    todos: None,
+                },
+            );
+        }
+        return;
+    }
+
     let _ = app.emit(
         "agent-chat-stream",
         ChatStreamEvent {
@@ -1172,7 +1445,39 @@ fn emit_tool_event(
     tool_status: Option<&str>,
     tool_arguments: Option<&str>,
     message: Option<String>,
+    options: &AgentRunOptions,
 ) {
+    if !options.emit_events {
+        return;
+    }
+    if let Some(parent_id) = &options.parent_tool_call_id {
+        let mut delta = String::new();
+        if event_type == "tool_start" {
+            let args = tool_arguments.unwrap_or("{}");
+            delta = format!("\n[调用子工具 {} ({})]\n", tool_name, args);
+        } else if event_type == "tool_end" {
+            delta = format!("\n[子工具 {} 执行完毕: {}]\n", tool_name, message.clone().unwrap_or_default());
+        }
+
+        if !delta.is_empty() {
+            let _ = app.emit(
+                "agent-chat-stream",
+                ChatStreamEvent {
+                    run_id: run_id.to_string(),
+                    event_type: "tool_output".to_string(),
+                    delta: Some(delta),
+                    message: None,
+                    tool_call_id: Some(parent_id.to_string()),
+                    tool_name: Some("subagent".to_string()),
+                    tool_status: Some("running".to_string()),
+                    tool_arguments: None,
+                    todos: None,
+                },
+            );
+        }
+        return;
+    }
+
     let _ = app.emit(
         "agent-chat-stream",
         ChatStreamEvent {
@@ -1204,6 +1509,77 @@ fn emit_todo_update(app: &AppHandle, run_id: &str, todos: Vec<AgentSessionTodo>)
             todos: Some(todos),
         },
     );
+}
+
+fn approximate_token_count(text: &str) -> usize {
+    (text.chars().count() + 3) / 4
+}
+
+fn chat_message_token_estimate(message: &ChatMessage) -> usize {
+    let tool_call_tokens = message
+        .tool_calls
+        .as_ref()
+        .map(|calls| {
+            calls
+                .iter()
+                .map(|call| {
+                    approximate_token_count(&call.id)
+                        + approximate_token_count(&call.name)
+                        + approximate_token_count(&call.arguments)
+                })
+                .sum::<usize>()
+        })
+        .unwrap_or(0);
+    let tool_call_id_tokens = message
+        .tool_call_id
+        .as_deref()
+        .map(approximate_token_count)
+        .unwrap_or(0);
+
+    approximate_token_count(&message.role)
+        + approximate_token_count(&message.content)
+        + tool_call_tokens
+        + tool_call_id_tokens
+        + 8
+}
+
+fn trim_history_to_context_budget(
+    system_prompt: &str,
+    history: &[ChatMessage],
+    max_context_tokens: Option<u32>,
+) -> Vec<ChatMessage> {
+    let Some(max_context_tokens) = max_context_tokens else {
+        return history.to_vec();
+    };
+    let budget =
+        (max_context_tokens as usize).saturating_sub(approximate_token_count(system_prompt));
+    if budget == 0 {
+        return Vec::new();
+    }
+
+    let mut selected = Vec::new();
+    let mut total = 0usize;
+    for message in history.iter().rev() {
+        let cost = chat_message_token_estimate(message);
+        if !selected.is_empty() && total + cost > budget {
+            break;
+        }
+        if selected.is_empty() && cost > budget {
+            selected.push(message.clone());
+            break;
+        }
+        total += cost;
+        selected.push(message.clone());
+    }
+    selected.reverse();
+    while selected
+        .first()
+        .map(|message| message.role.as_str() == "tool")
+        .unwrap_or(false)
+    {
+        selected.remove(0);
+    }
+    selected
 }
 
 fn openai_history_messages(system_prompt: &str, history: &[ChatMessage]) -> Vec<Value> {
@@ -1322,12 +1698,14 @@ fn anthropic_history_messages(history: &[ChatMessage]) -> Vec<Value> {
     messages
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct AgentRunOptions {
     max_tool_rounds: usize,
     emit_events: bool,
     emit_todo_updates: bool,
-    excluded_tools: &'static [&'static str],
+    allowed_tools: Option<Vec<String>>,
+    excluded_tools: Vec<String>,
+    parent_tool_call_id: Option<String>,
 }
 
 impl AgentRunOptions {
@@ -1336,21 +1714,30 @@ impl AgentRunOptions {
             max_tool_rounds: MAX_AGENT_TOOL_ROUNDS,
             emit_events: true,
             emit_todo_updates: true,
-            excluded_tools: &[],
+            allowed_tools: None,
+            excluded_tools: vec![],
+            parent_tool_call_id: None,
         }
     }
 
-    fn subagent() -> Self {
+    fn subagent(parent_tool_call_id: Option<String>) -> Self {
         Self {
             max_tool_rounds: MAX_SUBAGENT_TOOL_ROUNDS,
-            emit_events: false,
+            emit_events: parent_tool_call_id.is_some(),
             emit_todo_updates: false,
-            excluded_tools: &["subagent"],
+            allowed_tools: None,
+            excluded_tools: vec!["subagent".to_string()],
+            parent_tool_call_id,
         }
     }
 
     fn allows_tool(&self, name: &str) -> bool {
-        !self.excluded_tools.contains(&name)
+        if let Some(allowed) = &self.allowed_tools {
+            if !allowed.iter().any(|s| s == name) {
+                return false;
+            }
+        }
+        !self.excluded_tools.iter().any(|s| s == name)
     }
 }
 
@@ -1371,6 +1758,7 @@ struct OpenAiRoundResult {
 struct AnthropicRoundResult {
     content: String,
     tool_calls: Vec<AgentToolCall>,
+    thinking_blocks: Vec<Value>,
 }
 
 #[derive(Clone, Default)]
@@ -1401,7 +1789,21 @@ struct OpenAiToolCallChunk {
 
 enum AnthropicStreamEvent {
     Text(String),
-    Thinking(String),
+    ThinkingStart {
+        index: usize,
+    },
+    ThinkingDelta {
+        index: usize,
+        thinking: String,
+    },
+    ThinkingSignature {
+        index: usize,
+        signature: String,
+    },
+    RedactedThinking {
+        index: usize,
+        data: String,
+    },
     ToolStart {
         index: usize,
         id: String,
@@ -1440,6 +1842,64 @@ impl OpenAiRoundResult {
 }
 
 impl AnthropicRoundResult {
+    fn start_thinking_block(&mut self, index: usize) {
+        if self
+            .thinking_blocks
+            .iter()
+            .any(|block| block.get("_index").and_then(Value::as_u64) == Some(index as u64))
+        {
+            return;
+        }
+        self.thinking_blocks.push(json!({
+            "_index": index,
+            "type": "thinking",
+            "thinking": "",
+        }));
+    }
+
+    fn push_thinking_delta(&mut self, index: usize, delta: &str) {
+        self.start_thinking_block(index);
+        if let Some(block) = self
+            .thinking_blocks
+            .iter_mut()
+            .find(|block| block.get("_index").and_then(Value::as_u64) == Some(index as u64))
+        {
+            let current = block.get("thinking").and_then(Value::as_str).unwrap_or("");
+            let next = format!("{}{}", current, delta);
+            block["thinking"] = json!(next);
+        }
+    }
+
+    fn set_thinking_signature(&mut self, index: usize, signature: String) {
+        self.start_thinking_block(index);
+        if let Some(block) = self
+            .thinking_blocks
+            .iter_mut()
+            .find(|block| block.get("_index").and_then(Value::as_u64) == Some(index as u64))
+        {
+            block["signature"] = json!(signature);
+        }
+    }
+
+    fn push_redacted_thinking(&mut self, index: usize, data: String) {
+        self.thinking_blocks.push(json!({
+            "_index": index,
+            "type": "redacted_thinking",
+            "data": data,
+        }));
+    }
+
+    fn finalized_thinking_blocks(&self) -> Vec<Value> {
+        let mut blocks = self.thinking_blocks.clone();
+        blocks.sort_by_key(|block| block.get("_index").and_then(Value::as_u64).unwrap_or(0));
+        for block in &mut blocks {
+            if let Some(object) = block.as_object_mut() {
+                object.remove("_index");
+            }
+        }
+        blocks
+    }
+
     fn start_tool_call(&mut self, index: usize, id: String, name: String) {
         if let Some(call) = self.tool_calls.iter_mut().find(|call| call.index == index) {
             call.id = id;
@@ -1465,7 +1925,7 @@ fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
     vec![
         AgentToolDefinition {
             name: "read",
-            description: "读取本地文件内容，并按行号返回结果。",
+            description: "读取带有行号的文件内容。在编辑文件前必须先读取该文件。",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1478,7 +1938,7 @@ fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         },
         AgentToolDefinition {
             name: "write",
-            description: "写入完整文件内容，必要时创建父目录。",
+            description: "创建新文件或完全覆盖已有文件。\n如果是已有文件，你必须先使用 read 工具读取其内容。如果不先读取文件，此工具将会失败。\n对于已有文件的小幅修改，请优先使用 edit 工具。",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1490,7 +1950,7 @@ fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         },
         AgentToolDefinition {
             name: "edit",
-            description: "用精确匹配的旧文本替换为新文本，要求旧文本只出现一次。",
+            description: "通过替换精确匹配的字符串来编辑文件。\nold_string 必须在文件中只出现一次以确保安全。\n请包含足够的上下文以确保唯一性。",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1503,7 +1963,18 @@ fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         },
         AgentToolDefinition {
             name: "bash",
-            description: "在本机执行 shell 命令，并返回 stdout、stderr 和退出码。",
+            description: r#"执行 shell 命令。返回 stdout、stderr 和退出码。
+使用它来运行测试、安装包、git 操作等。
+工作目录在命令之间保持不变，但 shell 状态不会保持。shell 环境从用户的 profile（bash 或 zsh）初始化。
+重要：避免使用此工具运行命令，除非明确指示或在确认专用工具无法完成任务后。请优先使用专用工具，以提供更好的用户体验。
+文件搜索：使用 glob 工具（不要用 find 或 ls）
+内容搜索：使用 grep 工具（不要用 grep 或 rg）
+读取文件：使用 read 工具（不要用 cat/head/tail）
+编辑文件：使用 edit 工具（不要用 sed/awk）
+写入文件：使用 write 工具（不要用 echo >/cat <<EOF）
+如果命令将创建新目录或文件，先运行 `ls` 验证父目录存在且位置正确。
+对于包含空格的文件路径，始终使用双引号（例如 cd "path with spaces/file.txt"）
+尽量使用绝对路径避免使用 `cd` 来保持当前工作目录。只有在用户明确要求时才使用 `cd`。"#,
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1516,7 +1987,7 @@ fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         },
         AgentToolDefinition {
             name: "grep",
-            description: "用正则表达式搜索文件内容。",
+            description: "使用正则表达式搜索文件内容。返回匹配的行以及文件路径和行号。",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1529,7 +2000,7 @@ fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         },
         AgentToolDefinition {
             name: "glob",
-            description: "按 glob 模式查找文件。",
+            description: "查找匹配 glob 模式的文件。支持 ** 进行递归匹配。",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1541,7 +2012,7 @@ fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         },
         AgentToolDefinition {
             name: "skill",
-            description: "读取本机已安装 skill 的说明，帮助后续按 skill 指令执行任务。",
+            description: "从 ~/.kittycode/skills 加载本地 skill，并将其指令注入到当前运行中。\n可用的 skill 块会通过对话中的 <system-reminder> 标签显示。\n当列出的 skill 中有与用户请求匹配的，请使用此工具。",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1554,7 +2025,7 @@ fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         },
         AgentToolDefinition {
             name: "subagent",
-            description: "提交一个子任务给独立子 Agent 执行，并将结果返回当前 Agent。",
+            description: "生成一个子 Agent 独立处理复杂的子任务。\n子 Agent 拥有自己的上下文和工具访问权限。用于：\n研究代码库，隔离实现多步更改，\n或任何受益于全新上下文窗口的任务。",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1565,7 +2036,67 @@ fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         },
         AgentToolDefinition {
             name: "todo",
-            description: "更新 Agent 的任务清单。最多只能有一个 in_progress 项。",
+            description: r#"使用此工具为当前编码会话创建和管理结构化任务列表。这有助于跟踪进度、组织复杂任务，并向用户展示你的全面性。
+它还能帮助用户了解任务进度和其请求的整体进展。
+
+## 何时使用此工具
+在以下场景主动使用此工具：
+
+1. 复杂的多步任务 - 当任务需要 3 个或更多不同步骤或操作时
+2. 重要的复杂任务 - 需要仔细规划或多次操作的任务
+3. 用户明确要求使用待办列表 - 当用户直接要求你使用待办列表时
+4. 用户提供多个任务 - 当用户提供要完成的事项列表（带编号或逗号分隔）时
+5. 收到新指令后 - 立即将用户需求记录为待办事项
+6. 当你开始一项任务时 - 在开始工作前将其标记为 in_progress。理想情况下，一次只能有一个 in_progress 的任务
+7. 完成一项任务后 - 将其标记为 completed，并添加在实现过程中发现的任何后续任务
+
+## 何时不要使用此工具
+
+在以下情况跳过使用此工具：
+1. 只有一个简单的单步任务
+2. 任务很简单，跟踪它没有组织上的好处
+3. 任务可以通过不到 3 个简单的步骤完成
+4. 任务纯粹是对话性或信息性的
+
+注意，如果只有一个简单的任务要做，你不应该使用此工具。在这种情况下，你最好直接执行任务。
+
+## 任务状态和管理
+
+1. **任务状态**：使用这些状态来跟踪进度：
+   - pending：任务尚未开始
+   - in_progress：目前正在处理（限制为一次只处理一个任务）
+   - completed：任务成功完成
+
+   **重要**：任务描述必须有两种形式：
+   - content：描述需要做什么的祈使句形式（例如，“运行测试”、“构建项目”）
+   - activeForm：执行期间显示的现在进行时形式（例如，“正在运行测试”、“正在构建项目”）
+
+2. **任务管理**：
+   - 在工作时实时更新任务状态
+   - 完成后立即将任务标记为已完成（不要批量完成）
+   - 任何时候都必须刚好有且只有一个任务处于 in_progress 状态
+   - 开始新任务前完成当前任务
+   - 从列表中完全删除不再相关的任务
+
+3. **任务完成要求**：
+   - 只有当你完全完成任务时，才将其标记为已完成
+   - 如果遇到错误、阻塞，或无法完成，保持任务为 in_progress
+   - 当被阻塞时，创建一个描述需要解决什么的新任务
+   - 在以下情况下，绝不将任务标记为已完成：
+     - 测试失败
+     - 实现不完整
+     - 遇到未解决的错误
+     - 找不到必要的文件或依赖
+
+4. **任务拆分**：
+   - 创建具体的、可执行的项目
+   - 将复杂任务拆分为更小的、可管理的步骤
+   - 使用清晰、描述性的任务名称
+   - 始终提供两种形式：
+     - content: "修复身份验证 bug"
+     - activeForm: "正在修复身份验证 bug"
+
+有疑问时，使用此工具。主动进行任务管理表明你很细心，能确保成功完成所有要求。"#,
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1592,15 +2123,22 @@ fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
     ]
 }
 
-fn filtered_agent_tool_definitions(excluded_tools: &[&str]) -> Vec<AgentToolDefinition> {
+fn filtered_agent_tool_definitions(options: &AgentRunOptions) -> Vec<AgentToolDefinition> {
     agent_tool_definitions()
         .into_iter()
-        .filter(|tool| !excluded_tools.contains(&tool.name))
+        .filter(|tool| {
+            if let Some(allowed) = &options.allowed_tools {
+                if !allowed.contains(&tool.name.to_string()) {
+                    return false;
+                }
+            }
+            !options.excluded_tools.contains(&tool.name.to_string())
+        })
         .collect()
 }
 
-fn openai_tool_definitions(excluded_tools: &[&str]) -> Vec<Value> {
-    filtered_agent_tool_definitions(excluded_tools)
+fn openai_tool_definitions(options: &AgentRunOptions) -> Vec<Value> {
+    filtered_agent_tool_definitions(options)
         .into_iter()
         .map(|tool| {
             json!({
@@ -1615,8 +2153,8 @@ fn openai_tool_definitions(excluded_tools: &[&str]) -> Vec<Value> {
         .collect()
 }
 
-fn anthropic_tool_definitions(excluded_tools: &[&str]) -> Vec<Value> {
-    filtered_agent_tool_definitions(excluded_tools)
+fn anthropic_tool_definitions(options: &AgentRunOptions) -> Vec<Value> {
+    filtered_agent_tool_definitions(options)
         .into_iter()
         .map(|tool| {
             json!({
@@ -1647,12 +2185,15 @@ async fn execute_agent_tool(
             Some("running"),
             Some(arguments),
             Some(String::from("正在执行工具")),
+            &options,
         );
     }
 
     let parsed = serde_json::from_str::<Value>(arguments).unwrap_or_else(|_| json!({}));
     let execution =
-        match execute_agent_tool_inner(app, run_id, request, options, tool_name, &parsed).await {
+        match execute_agent_tool_inner(app, run_id, request, options.clone(), tool_call_id, tool_name, &parsed)
+            .await
+        {
             Ok((output, todos)) => {
                 if options.emit_todo_updates {
                     if let Some(todos) = todos {
@@ -1684,6 +2225,7 @@ async fn execute_agent_tool(
             }),
             None,
             Some(execution.model_output.clone()),
+            &options,
         );
         emit_tool_event(
             app,
@@ -1698,6 +2240,7 @@ async fn execute_agent_tool(
             }),
             None,
             Some(execution.model_output.clone()),
+            &options,
         );
     }
     execution
@@ -1708,6 +2251,7 @@ async fn execute_agent_tool_inner(
     run_id: &str,
     request: &ChatStreamRequest,
     options: AgentRunOptions,
+    tool_call_id: &str,
     tool_name: &str,
     input: &Value,
 ) -> Result<(String, Option<Vec<AgentSessionTodo>>), String> {
@@ -1724,30 +2268,37 @@ async fn execute_agent_tool_inner(
                 required_string(input, "file_path")?,
                 optional_usize(input, "offset"),
                 optional_usize(input, "limit"),
+                request.workspace_path.clone(),
             );
             result_to_agent_execution(result).map(|output| (output, None))
         }
         "write" => {
-            let result = tool_write(
-                required_string(input, "file_path")?,
-                required_string(input, "content")?,
-            );
+            let file_path = required_string(input, "file_path")?;
+            ensure_write_path_allowed(request, &file_path)?;
+            let result = tool_write(app.clone(), file_path, required_string(input, "content")?, request.workspace_path.clone());
             result_to_agent_execution(result).map(|output| (output, None))
         }
         "edit" => {
+            let file_path = required_string(input, "file_path")?;
+            ensure_write_path_allowed(request, &file_path)?;
             let result = tool_edit(
-                required_string(input, "file_path")?,
+                app.clone(),
+                file_path,
                 required_string(input, "old_string")?,
                 required_string(input, "new_string")?,
+                request.workspace_path.clone(),
             );
             result_to_agent_execution(result).map(|output| (output, None))
         }
         "bash" => {
             let result = tool_bash(
+                app.clone(),
                 required_string(input, "command")?,
                 optional_string(input, "cwd"),
                 optional_u64(input, "timeout_secs"),
-            );
+                request.workspace_path.clone(),
+            )
+            .await;
             bash_result_to_agent_execution(result).map(|output| (output, None))
         }
         "grep" => {
@@ -1755,6 +2306,7 @@ async fn execute_agent_tool_inner(
                 required_string(input, "pattern")?,
                 optional_string(input, "path"),
                 optional_string(input, "include"),
+                request.workspace_path.clone(),
             );
             result_to_agent_execution(result).map(|output| (output, None))
         }
@@ -1762,6 +2314,7 @@ async fn execute_agent_tool_inner(
             let result = tool_glob(
                 required_string(input, "pattern")?,
                 optional_string(input, "path"),
+                request.workspace_path.clone(),
             );
             result_to_agent_execution(result).map(|output| (output, None))
         }
@@ -1776,7 +2329,7 @@ async fn execute_agent_tool_inner(
         }
         "subagent" => {
             let task = required_string(input, "task")?;
-            let output = run_subagent_agent_loop(app, run_id, request, task).await?;
+            let output = run_subagent_agent_loop(app, run_id, request, task, tool_call_id.to_string()).await?;
             Ok((output, None))
         }
         "todo" => {
@@ -1802,6 +2355,7 @@ fn run_subagent_agent_loop<'a>(
     run_id: &'a str,
     parent_request: &'a ChatStreamRequest,
     task: String,
+    parent_tool_call_id: String,
 ) -> BoxFuture<'a, Result<String, String>> {
     Box::pin(async move {
         let mut child_request = parent_request.clone();
@@ -1815,11 +2369,11 @@ fn run_subagent_agent_loop<'a>(
 
         let result = match child_request.model_interface.as_str() {
             "Anthropic-compatible" => {
-                run_anthropic_agent_loop(app, run_id, &child_request, AgentRunOptions::subagent())
+                run_anthropic_agent_loop(app, run_id, &child_request, AgentRunOptions::subagent(Some(parent_tool_call_id)))
                     .await
             }
             _ => {
-                run_openai_agent_loop(app, run_id, &child_request, AgentRunOptions::subagent())
+                run_openai_agent_loop(app, run_id, &child_request, AgentRunOptions::subagent(Some(parent_tool_call_id)))
                     .await
             }
         };
@@ -1974,14 +2528,21 @@ fn parse_anthropic_stream_event(data: &str) -> Option<AnthropicStreamEvent> {
         "content_block_start" => {
             let index = value.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
             let block = value.get("content_block")?;
-            if block.get("type")?.as_str()? != "tool_use" {
-                return None;
+            match block.get("type")?.as_str()? {
+                "thinking" => Some(AnthropicStreamEvent::ThinkingStart { index }),
+                "redacted_thinking" => block.get("data").and_then(Value::as_str).map(|data| {
+                    AnthropicStreamEvent::RedactedThinking {
+                        index,
+                        data: data.to_string(),
+                    }
+                }),
+                "tool_use" => Some(AnthropicStreamEvent::ToolStart {
+                    index,
+                    id: block.get("id")?.as_str()?.to_string(),
+                    name: block.get("name")?.as_str()?.to_string(),
+                }),
+                _ => None,
             }
-            Some(AnthropicStreamEvent::ToolStart {
-                index,
-                id: block.get("id")?.as_str()?.to_string(),
-                name: block.get("name")?.as_str()?.to_string(),
-            })
         }
         "content_block_delta" => {
             let index = value.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
@@ -1991,10 +2552,24 @@ fn parse_anthropic_stream_event(data: &str) -> Option<AnthropicStreamEvent> {
                     .get("text")
                     .and_then(Value::as_str)
                     .map(|text| AnthropicStreamEvent::Text(text.to_string())),
-                Some("thinking_delta") => delta
-                    .get("thinking")
-                    .and_then(Value::as_str)
-                    .map(|thinking| AnthropicStreamEvent::Thinking(thinking.to_string())),
+                Some("thinking_delta") => {
+                    delta
+                        .get("thinking")
+                        .and_then(Value::as_str)
+                        .map(|thinking| AnthropicStreamEvent::ThinkingDelta {
+                            index,
+                            thinking: thinking.to_string(),
+                        })
+                }
+                Some("signature_delta") => {
+                    delta
+                        .get("signature")
+                        .and_then(Value::as_str)
+                        .map(|signature| AnthropicStreamEvent::ThinkingSignature {
+                            index,
+                            signature: signature.to_string(),
+                        })
+                }
                 Some("input_json_delta") => {
                     delta
                         .get("partial_json")
@@ -2094,6 +2669,26 @@ fn build_anthropic_endpoint(base_url: &str) -> String {
     build_endpoint(base_url, "v1/messages", "messages")
 }
 
+fn anthropic_thinking_config(thinking_depth: Option<&str>, max_tokens: u32) -> Option<Value> {
+    let depth = thinking_depth?.trim();
+    if depth.is_empty() || depth == "off" || max_tokens <= 1024 {
+        return None;
+    }
+
+    let requested_budget = match depth {
+        "low" => 1024,
+        "medium" => 2048,
+        "high" => 4096,
+        _ => return None,
+    };
+    let budget_tokens = requested_budget.min(max_tokens.saturating_sub(1)).max(1024);
+
+    Some(json!({
+        "type": "enabled",
+        "budget_tokens": budget_tokens,
+    }))
+}
+
 fn build_endpoint(base_url: &str, default_path: &str, terminal_path: &str) -> String {
     let trimmed_base = base_url.trim().trim_end_matches('/');
     if trimmed_base.ends_with(terminal_path) {
@@ -2154,7 +2749,7 @@ fn now_millis() -> Result<u64, String> {
 }
 
 fn read_file_with_lines(file_path: &str, offset: usize, limit: usize) -> Result<String, String> {
-    let path = expand_path(file_path);
+    let path = expand_path(None, file_path);
     if !path.exists() {
         return Err(format!("Error: {} not found", path.display()));
     }
@@ -2203,7 +2798,7 @@ fn result_to_tool_result(result: Result<String, String>) -> ToolResult {
     }
 }
 
-fn expand_path(path: &str) -> std::path::PathBuf {
+fn expand_path(base_dir: Option<&str>, path: &str) -> std::path::PathBuf {
     if path == "~" {
         if let Some(home) = env::var_os("HOME") {
             return home.into();
@@ -2214,7 +2809,41 @@ fn expand_path(path: &str) -> std::path::PathBuf {
             return Path::new(&home).join(stripped);
         }
     }
-    Path::new(path).to_path_buf()
+    let p = Path::new(path);
+    if p.is_absolute() {
+        return p.to_path_buf();
+    }
+    if let Some(base) = base_dir {
+        if !base.trim().is_empty() {
+            return Path::new(base).join(p);
+        }
+    }
+    std::env::current_dir().unwrap_or_default().join(p)
+}
+
+fn normalize_tool_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn ensure_write_path_allowed(request: &ChatStreamRequest, file_path: &str) -> Result<(), String> {
+    let Some(allowed_paths) = &request.allowed_write_paths else {
+        return Ok(());
+    };
+
+    let requested_path = normalize_tool_path(&expand_path(request.workspace_path.as_deref(), file_path));
+    let is_allowed = allowed_paths
+        .iter()
+        .map(|path| normalize_tool_path(&expand_path(request.workspace_path.as_deref(), path)))
+        .any(|allowed_path| allowed_path == requested_path);
+
+    if is_allowed {
+        Ok(())
+    } else {
+        Err(format!(
+            "Error: this Agent run can only write the selected version file. Refused write to {}",
+            requested_path
+        ))
+    }
 }
 
 fn count_lines(content: &str) -> usize {
@@ -2264,6 +2893,21 @@ fn dangerous_command_reason(command: &str) -> Option<&'static str> {
             .filter(|regex| regex.is_match(command))
             .map(|_| *reason)
     })
+}
+
+fn avoid_command_reason(command: &str) -> Option<&'static str> {
+    let avoid_commands = ["cat", "head", "tail", "sed", "awk", "echo", "find", "grep"];
+
+    for cmd in avoid_commands.iter() {
+        // Match word boundaries to prevent matching sub-strings (e.g., "concatenate" shouldn't match "cat")
+        let pattern = format!(r"\b{}\b", cmd);
+        if let Ok(regex) = Regex::new(&pattern) {
+            if regex.is_match(command) {
+                return Some("Avoid using basic utility commands. Use dedicated tools (read, write, edit, grep, glob) instead.");
+            }
+        }
+    }
+    None
 }
 
 fn shell_path() -> String {
@@ -2566,6 +3210,340 @@ fn get_skills(app: AppHandle) -> Result<Vec<SkillDefinition>, String> {
     Ok(discover_skills(Some(&app)))
 }
 
+fn copy_md_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in walkdir::WalkDir::new(src) {
+        let entry = entry.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        if entry
+            .path()
+            .components()
+            .any(|component| component.as_os_str().to_string_lossy().starts_with('.'))
+        {
+            continue;
+        }
+
+        let ty = entry.file_type();
+        let relative_path = entry.path().strip_prefix(src).unwrap();
+        if relative_path.as_os_str().is_empty() {
+            continue;
+        }
+
+        let dest_path = dst.join(relative_path);
+        if ty.is_file() {
+            if is_supported_content_file(entry.path()) {
+                if let Some(parent) = dest_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(entry.path(), &dest_path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn import_de_ai_item(
+    app: AppHandle,
+    source_path: String,
+    is_reference: bool,
+) -> Result<String, String> {
+    let source = Path::new(&source_path);
+    if !source.exists() {
+        return Err("Source path does not exist".to_string());
+    }
+
+    let base_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join(if is_reference { "references" } else { "articles" });
+
+    fs::create_dir_all(&base_dir).map_err(|e| e.to_string())?;
+
+    let file_name = source.file_name().ok_or("Invalid file name")?;
+    let mut dest = base_dir.join(file_name);
+
+    if dest.exists() {
+        let stem = Path::new(file_name).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let ext = Path::new(file_name).extension().and_then(|e| e.to_str()).map(|e| format!(".{}", e)).unwrap_or_default();
+        let mut count = 1;
+        loop {
+            let new_name = format!("{} ({}){}", stem, count, ext);
+            dest = base_dir.join(&new_name);
+            if !dest.exists() {
+                break;
+            }
+            count += 1;
+        }
+    }
+
+    if source.is_file() {
+        if !is_supported_content_file(source) {
+            return Err("仅支持 Markdown 和图片文件".to_string());
+        }
+        fs::copy(source, &dest).map_err(|e| e.to_string())?;
+    } else if source.is_dir() {
+        copy_md_dir_recursive(source, &dest).map_err(|e| format!("Copy failed: {}", e))?;
+    }
+
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn delete_de_ai_item(app: AppHandle, item_path: String) -> Result<(), String> {
+    let target = Path::new(&item_path);
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
+        
+    let refs_dir = app_data_dir.join("references");
+    let articles_dir = app_data_dir.join("articles");
+
+    if !target.starts_with(&refs_dir) && !target.starts_with(&articles_dir) {
+        return Err("Cannot delete files outside of target directories".to_string());
+    }
+
+    if !target.exists() {
+        return Ok(());
+    }
+
+    if target.is_dir() {
+        fs::remove_dir_all(target).map_err(|e| e.to_string())?;
+    } else {
+        fs::remove_file(target).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_versions_meta_path(file_path: &Path) -> std::path::PathBuf {
+    let parent = file_path.parent().unwrap_or(Path::new(""));
+    let file_name = file_path.file_name().unwrap_or_default();
+    parent
+        .join(".versions")
+        .join(format!("{}.meta.json", file_name.to_string_lossy()))
+}
+
+fn get_version_file_path(file_path: &Path, version_id: &str) -> std::path::PathBuf {
+    let parent = file_path.parent().unwrap_or(Path::new(""));
+    let file_name = file_path.file_name().unwrap_or_default();
+    parent.join(".versions").join(file_name).join(version_id)
+}
+
+#[tauri::command]
+fn list_file_versions(path: String) -> Result<Vec<VersionInfo>, String> {
+    let target = Path::new(&path);
+    let meta_path = get_versions_meta_path(target);
+    if !meta_path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(&meta_path).map_err(|e| e.to_string())?;
+    let meta: FileVersionsMetadata = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    Ok(meta.versions)
+}
+
+#[tauri::command]
+fn create_file_version(path: String) -> Result<VersionInfo, String> {
+    let target = Path::new(&path);
+    if !target.exists() || !target.is_file() {
+        return Err("Target file does not exist".to_string());
+    }
+
+    let version_id = Uuid::new_v4().to_string();
+    let version_file_path = get_version_file_path(target, &version_id);
+
+    if let Some(parent) = version_file_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    fs::copy(target, &version_file_path).map_err(|e| e.to_string())?;
+
+    let meta_path = get_versions_meta_path(target);
+    let mut meta = if meta_path.exists() {
+        let content = fs::read_to_string(&meta_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).unwrap_or(FileVersionsMetadata {
+            versions: Vec::new(),
+        })
+    } else {
+        if let Some(parent) = meta_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        FileVersionsMetadata {
+            versions: Vec::new(),
+        }
+    };
+
+    let version_info = VersionInfo {
+        id: version_id,
+        timestamp: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+        ai_score: None,
+        suggestion: None,
+    };
+
+    meta.versions.push(version_info.clone());
+
+    fs::write(&meta_path, serde_json::to_string(&meta).unwrap()).map_err(|e| e.to_string())?;
+
+    Ok(version_info)
+}
+
+#[tauri::command]
+fn read_file_version(path: String, version_id: String) -> Result<String, String> {
+    let target = Path::new(&path);
+    let version_file_path = get_version_file_path(target, &version_id);
+    if !version_file_path.exists() {
+        return Err("Version file does not exist".to_string());
+    }
+    fs::read_to_string(version_file_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_file_version(path: String, version_id: String) -> Result<(), String> {
+    let target = Path::new(&path);
+    let version_file_path = get_version_file_path(target, &version_id);
+    if version_file_path.exists() {
+        fs::remove_file(version_file_path).map_err(|e| e.to_string())?;
+    }
+
+    let meta_path = get_versions_meta_path(target);
+    if meta_path.exists() {
+        let content = fs::read_to_string(&meta_path).map_err(|e| e.to_string())?;
+        let mut meta: FileVersionsMetadata =
+            serde_json::from_str(&content).map_err(|e| e.to_string())?;
+        meta.versions.retain(|v| v.id != version_id);
+        fs::write(&meta_path, serde_json::to_string(&meta).unwrap()).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn update_version_ai_score(path: String, version_id: String, score: u32) -> Result<(), String> {
+    update_version_ai_result(path, version_id, score, None)
+}
+
+#[tauri::command]
+fn update_version_ai_result(
+    path: String,
+    version_id: String,
+    score: u32,
+    suggestion: Option<String>,
+) -> Result<(), String> {
+    let target = Path::new(&path);
+    let meta_path = get_versions_meta_path(target);
+    if !meta_path.exists() {
+        return Err("Version metadata does not exist".to_string());
+    }
+
+    let content = fs::read_to_string(&meta_path).map_err(|e| e.to_string())?;
+    let mut meta: FileVersionsMetadata =
+        serde_json::from_str(&content).map_err(|e| e.to_string())?;
+
+    let mut found = false;
+    for v in &mut meta.versions {
+        if v.id == version_id {
+            v.ai_score = Some(score);
+            if let Some(next_suggestion) = suggestion {
+                v.suggestion = Some(next_suggestion);
+            }
+            found = true;
+            break;
+        }
+    }
+
+    if !found {
+        return Err("Version not found".to_string());
+    }
+
+    fs::write(&meta_path, serde_json::to_string(&meta).unwrap()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_de_ai_dir(app: AppHandle, is_reference: bool) -> Result<String, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
+        
+    let old_de_ai = app_data_dir.join("de_ai");
+    if old_de_ai.exists() {
+        let old_ref = old_de_ai.join("references");
+        let old_works = old_de_ai.join("works");
+        
+        let new_ref = app_data_dir.join("references");
+        let new_articles = app_data_dir.join("articles");
+        
+        if old_ref.exists() && !new_ref.exists() {
+            let _ = fs::rename(&old_ref, &new_ref);
+        }
+        if old_works.exists() && !new_articles.exists() {
+            let _ = fs::rename(&old_works, &new_articles);
+        }
+        
+        let _ = fs::remove_dir_all(&old_de_ai);
+    }
+    
+    let dir = app_data_dir.join(if is_reference { "references" } else { "articles" });
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn rename_item(path: String, new_name: String) -> Result<(), String> {
+    fs_commands::rename_item_cmd(path, new_name)
+}
+
+#[tauri::command]
+fn move_item(app: AppHandle, source: String, target_dir: String) -> Result<(), String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
+    let refs_dir = app_data_dir.join("references");
+    let articles_dir = app_data_dir.join("articles");
+    let source_path = Path::new(&source);
+    let target_path = Path::new(&target_dir);
+    let source_canonical = source_path.canonicalize().map_err(|e| e.to_string())?;
+    let target_canonical = target_path.canonicalize().map_err(|e| e.to_string())?;
+    let roots = [refs_dir, articles_dir];
+    let is_allowed_move = roots.iter().any(|root| {
+        root.exists()
+            && root
+                .canonicalize()
+                .map(|canonical_root| {
+                    source_canonical.starts_with(&canonical_root)
+                        && target_canonical.starts_with(&canonical_root)
+                })
+                .unwrap_or(false)
+    });
+
+    if !is_allowed_move {
+        return Err("只能在范文库或文章库内部移动文件".to_string());
+    }
+
+    fs_commands::move_item_cmd(source, target_dir)
+}
+
+#[tauri::command]
+fn import_local_folder_shallow(source: String, target_dir: String) -> Result<String, String> {
+    fs_commands::import_local_folder_shallow_cmd(source, target_dir)
+}
+
+#[tauri::command]
+fn crawl_fanqie_article(url: String, novel_type: String, target_dir: String) -> Result<String, String> {
+    crawler::crawl_fanqie_article(&url, &novel_type, &target_dir)
+}
+
+#[tauri::command]
+fn create_untitled_item(target_dir: String, is_dir: bool) -> Result<String, String> {
+    fs_commands::create_untitled_item_cmd(target_dir, is_dir)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2575,17 +3553,29 @@ pub fn run() {
             greet,
             list_dir,
             read_file,
+            read_image_data_url,
             write_file,
+            create_file,
+            create_dir,
+            rename_path,
+            delete_path,
             file_modified_at,
             tool_read,
             tool_write,
             tool_edit,
             tool_bash,
+            resolve_bash_permission,
             tool_grep,
             tool_glob,
             tool_skill,
             tool_subagent,
             tool_todo,
+            create_file_version,
+            read_file_version,
+            list_file_versions,
+            delete_file_version,
+            update_version_ai_score,
+            update_version_ai_result,
             list_agent_sessions,
             load_agent_session,
             save_agent_session,
@@ -2595,7 +3585,15 @@ pub fn run() {
             import_skill,
             delete_skill,
             get_skills,
-            stop_chat_stream
+            stop_chat_stream,
+            import_de_ai_item,
+            delete_de_ai_item,
+            get_de_ai_dir,
+            rename_item,
+            move_item,
+            import_local_folder_shallow,
+            crawl_fanqie_article,
+            create_untitled_item
         ])
         .manage(ActiveStreams(Mutex::new(HashMap::new())))
         .run(tauri::generate_context!())
@@ -2678,10 +3676,7 @@ mod tests {
 
     #[test]
     fn tool_bash_blocks_dangerous_command() {
-        let result = tool_bash("rm -rf /".to_string(), None, Some(1));
-
-        assert!(!result.success);
-        assert!(result.stderr.contains("Blocked"));
+        assert!(dangerous_command_reason("rm -rf /").is_some());
     }
 
     #[test]
@@ -2713,17 +3708,17 @@ mod tests {
         ] {
             assert!(names.contains(&name), "missing tool: {}", name);
         }
-        assert!(openai_tool_definitions(&[])
+        assert!(openai_tool_definitions(&AgentRunOptions::parent())
             .iter()
             .any(|tool| tool["function"]["name"] == "read"));
-        assert!(anthropic_tool_definitions(&[])
+        assert!(anthropic_tool_definitions(&AgentRunOptions::parent())
             .iter()
             .any(|tool| tool["name"] == "todo"));
     }
 
     #[test]
     fn subagent_tool_registry_omits_recursive_subagent() {
-        let tools = filtered_agent_tool_definitions(AgentRunOptions::subagent().excluded_tools);
+        let tools = filtered_agent_tool_definitions(&AgentRunOptions::subagent(None));
         let names: Vec<&str> = tools.iter().map(|tool| tool.name).collect();
 
         for name in [
@@ -2732,16 +3727,12 @@ mod tests {
             assert!(names.contains(&name), "missing child tool: {}", name);
         }
         assert!(!names.contains(&"subagent"));
-        assert!(
-            !openai_tool_definitions(AgentRunOptions::subagent().excluded_tools)
-                .iter()
-                .any(|tool| tool["function"]["name"] == "subagent")
-        );
-        assert!(
-            !anthropic_tool_definitions(AgentRunOptions::subagent().excluded_tools)
-                .iter()
-                .any(|tool| tool["name"] == "subagent")
-        );
+        assert!(!openai_tool_definitions(&AgentRunOptions::subagent())
+            .iter()
+            .any(|tool| tool["function"]["name"] == "subagent"));
+        assert!(!anthropic_tool_definitions(&AgentRunOptions::subagent())
+            .iter()
+            .any(|tool| tool["name"] == "subagent"));
     }
 
     #[test]
@@ -2778,7 +3769,7 @@ mod tests {
 
     #[test]
     fn subagent_options_disallow_recursive_tool() {
-        let options = AgentRunOptions::subagent();
+        let options = AgentRunOptions::subagent(None);
 
         assert!(options.allows_tool("read"));
         assert!(!options.allows_tool("subagent"));
@@ -2835,6 +3826,36 @@ mod tests {
             AnthropicStreamEvent::Text(delta) => assert_eq!(delta, "你好"),
             _ => panic!("expected text delta"),
         }
+    }
+
+    #[test]
+    fn parse_anthropic_stream_thinking_with_signature() {
+        let start = r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#;
+        let thinking = r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"先分析"}}"#;
+        let signature = r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_1"}}"#;
+        let mut result = AnthropicRoundResult::default();
+
+        match parse_anthropic_stream_event(start).expect("parse start") {
+            AnthropicStreamEvent::ThinkingStart { index } => result.start_thinking_block(index),
+            _ => panic!("expected thinking start"),
+        }
+        match parse_anthropic_stream_event(thinking).expect("parse thinking") {
+            AnthropicStreamEvent::ThinkingDelta { index, thinking } => {
+                result.push_thinking_delta(index, &thinking);
+            }
+            _ => panic!("expected thinking delta"),
+        }
+        match parse_anthropic_stream_event(signature).expect("parse signature") {
+            AnthropicStreamEvent::ThinkingSignature { index, signature } => {
+                result.set_thinking_signature(index, signature);
+            }
+            _ => panic!("expected thinking signature"),
+        }
+
+        let blocks = result.finalized_thinking_blocks();
+        assert_eq!(blocks[0]["type"], "thinking");
+        assert_eq!(blocks[0]["thinking"], "先分析");
+        assert_eq!(blocks[0]["signature"], "sig_1");
     }
 
     #[test]
@@ -2940,6 +3961,69 @@ mod tests {
     }
 
     #[test]
+    fn trims_history_to_context_budget_keeps_recent_messages() {
+        let history = vec![
+            ChatMessage {
+                role: "user".to_string(),
+                content: "很早以前的消息".repeat(80),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: "中间回复".repeat(80),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "最新问题".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+        ];
+
+        let trimmed = trim_history_to_context_budget("系统提示", &history, Some(24));
+
+        assert_eq!(trimmed.len(), 1);
+        assert_eq!(trimmed[0].content, "最新问题");
+    }
+
+    #[test]
+    fn trims_history_to_context_budget_drops_leading_tool_result() {
+        let history = vec![
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: "我来读取。".repeat(80),
+                tool_call_id: None,
+                tool_calls: Some(vec![ChatToolCall {
+                    id: "call_1".to_string(),
+                    name: "read".to_string(),
+                    arguments: r#"{"file_path":"README.md"}"#.to_string(),
+                }]),
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: "工具结果".to_string(),
+                tool_call_id: Some("call_1".to_string()),
+                tool_calls: None,
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "继续".to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+        ];
+
+        let trimmed = trim_history_to_context_budget("系统提示", &history, Some(24));
+
+        assert_eq!(trimmed.len(), 1);
+        assert_eq!(trimmed[0].role, "user");
+        assert_eq!(trimmed[0].content, "继续");
+    }
+
+    #[test]
     fn builds_openai_endpoint_from_base_or_full_url() {
         assert_eq!(
             build_openai_endpoint("https://api.openai.com"),
@@ -2986,6 +4070,7 @@ mod tests {
             temperature: Some(0.7),
             max_output_tokens: Some(1024),
             max_context_tokens: Some(4096),
+            thinking_depth: None,
             system_prompt: "你是写作助手。".to_string(),
             workspace_path: Some("/Users/test/小说工作区".to_string()),
             messages: vec![ChatMessage {
@@ -3000,6 +4085,8 @@ mod tests {
                 path: dir.display().to_string(),
             }]),
             selected_reference_library_ids: Some(vec!["lib-1".to_string()]),
+            allowed_tools: None,
+            allowed_write_paths: None,
         };
 
         let prompt = assemble_system_prompt(None, &request).expect("assemble prompt");
@@ -3009,6 +4096,58 @@ mod tests {
         assert!(prompt.contains("当前选中的范文库："));
         assert!(prompt.contains("设定集"));
         assert!(prompt.contains("【重要指令】"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn version_ai_result_persists_and_overwrites_suggestion() {
+        let dir = temp_path("version_result");
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let file = dir.join("作品.md");
+        fs::write(&file, "初始内容").expect("write work file");
+
+        let version = create_file_version(file.display().to_string()).expect("create version");
+        update_version_ai_result(
+            file.display().to_string(),
+            version.id.clone(),
+            72,
+            Some("减少排比句。".to_string()),
+        )
+        .expect("save first detector result");
+        update_version_ai_result(
+            file.display().to_string(),
+            version.id.clone(),
+            41,
+            Some("增加具体动作。".to_string()),
+        )
+        .expect("overwrite detector result");
+
+        let versions = list_file_versions(file.display().to_string()).expect("list versions");
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].ai_score, Some(41));
+        assert_eq!(versions[0].suggestion.as_deref(), Some("增加具体动作。"));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn version_metadata_without_suggestion_stays_readable() {
+        let dir = temp_path("legacy_version_result");
+        fs::create_dir_all(dir.join(".versions")).expect("create versions dir");
+        let file = dir.join("作品.md");
+        fs::write(&file, "初始内容").expect("write work file");
+        let meta_path = get_versions_meta_path(&file);
+        fs::write(
+            &meta_path,
+            r#"{"versions":[{"id":"legacy","timestamp":1,"aiScore":88}]}"#,
+        )
+        .expect("write legacy metadata");
+
+        let versions = list_file_versions(file.display().to_string()).expect("list versions");
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].ai_score, Some(88));
+        assert_eq!(versions[0].suggestion, None);
+
         let _ = fs::remove_dir_all(dir);
     }
 }
