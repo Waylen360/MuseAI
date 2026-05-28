@@ -7,7 +7,7 @@ fn is_importable_text_file(path: &Path) -> bool {
             .and_then(|extension| extension.to_str())
             .map(|extension| extension.to_ascii_lowercase())
             .as_deref(),
-        Some("md" | "txt")
+        Some("md" | "txt" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg")
     )
 }
 
