@@ -1,6 +1,6 @@
 import React from 'react';
 import { Form, Input, Button, InputNumber, Divider, Typography, Select, message, Anchor, Card } from 'antd';
-import { SettingOutlined, BookOutlined, DeploymentUnitOutlined, SafetyCertificateOutlined, AlertOutlined } from '@ant-design/icons';
+import { SettingOutlined, BookOutlined, DeploymentUnitOutlined, SafetyCertificateOutlined, AlertOutlined, MessageOutlined } from '@ant-design/icons';
 import {
   useSettingsStore,
   defaultSystemPrompt,
@@ -9,6 +9,7 @@ import {
   defaultWorkSummaryPrompt,
   defaultOutlineCreationPrompt,
   defaultOutlineAssessmentPrompt,
+  defaultPartnerChatPrompt,
 } from '../stores/useSettingsStore';
 
 const { Title } = Typography;
@@ -271,6 +272,16 @@ const Settings: React.FC = () => {
             { key: 'deai-config', href: '#deai-config', title: '去AI味页设置' },
           ]}
         />
+        <Divider style={{ margin: '12px 16px 12px -8px', borderColor: '#eae6df', minWidth: 'auto', width: 'calc(100% - 8px)' }} />
+        <Anchor
+          affix={false}
+          getContainer={() => document.getElementById('settings-scroll-container') as HTMLElement}
+          onClick={(e) => e.preventDefault()}
+          items={[
+            { key: 'background-config', href: '#background-config', title: '背景页设置' },
+            { key: 'partner-chat-config', href: '#partner-chat-config', title: '聊天页设置' },
+          ]}
+        />
       </div>
 
       {/* 右侧核心内容区域 */}
@@ -444,6 +455,55 @@ const Settings: React.FC = () => {
               onSavePrompt={store.setDeAiRemoverPrompt}
               onResetPrompt={store.resetDeAiRemoverPrompt}
               helpText="此提示词将作为润色去AI味的专家规范，依据分析意见小步快跑地优化文章，让人味更加突出。"
+            />
+          </section>
+
+          <Divider style={{ borderColor: '#eae6df', margin: '48px 0' }} />
+
+          {/* 背景页设置区域 */}
+          <section id="background-config" style={{ marginBottom: 48 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
+              <BookOutlined style={{ fontSize: '20px', color: '#d97757' }} />
+              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600 }}>背景页设置</Title>
+            </div>
+
+            <Card
+              style={{
+                backgroundColor: '#ffffff',
+                border: '1px solid #eae6df',
+                borderRadius: '12px',
+                boxShadow: '0 4px 20px rgba(217, 119, 87, 0.02)',
+                marginBottom: '24px',
+              }}
+              styles={{
+                body: {
+                  padding: '24px',
+                  textAlign: 'center',
+                  color: '#8c8882'
+                }
+              }}
+            >
+              背景页设置暂时留空
+            </Card>
+          </section>
+
+          <Divider style={{ borderColor: '#eae6df', margin: '48px 0' }} />
+
+          {/* 聊天页设置区域 */}
+          <section id="partner-chat-config" style={{ marginBottom: 48 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
+              <MessageOutlined style={{ fontSize: '20px', color: '#d97757' }} />
+              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600 }}>聊天页设置</Title>
+            </div>
+
+            <AgentSettingCard
+              title="聊天 Agent"
+              agentId="partnerChat"
+              defaultPrompt={defaultPartnerChatPrompt}
+              currentPrompt={store.partnerChatPrompt}
+              onSavePrompt={store.setPartnerChatPrompt}
+              onResetPrompt={store.resetPartnerChatPrompt}
+              helpText="此提示词将作为伴侣聊天室中聊天 Agent 的核心系统提示词。结尾将自动且优雅地嵌入用户选择的世界书、角色卡和个人信息。"
             />
           </section>
 

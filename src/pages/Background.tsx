@@ -636,6 +636,38 @@ const Background: React.FC = () => {
             </Card>
           </Space>
         )
+      },
+      {
+        key: '4',
+        label: '角色记忆',
+        children: (
+          <Space direction="vertical" size={16} style={{ width: '100%', marginTop: 8 }}>
+            <Card className="custom-sub-card" title="角色长期记忆（大模型提取或手动输入）" size="small">
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <div>
+                  <div className="input-label">关系记忆</div>
+                  <Input.TextArea 
+                    value={fields.relationMemory || ''} 
+                    autoSize={{ minRows: 3, maxRows: 6 }}
+                    className="custom-form-input"
+                    placeholder="描述该角色与用户当前的关系，例如双方的信任程度、共同立场或情感羁绊..."
+                    onChange={(e) => handleFieldChange('relationMemory', e.target.value)}
+                  />
+                </div>
+                <div>
+                  <div className="input-label">关键事件</div>
+                  <Input.TextArea 
+                    value={fields.keyEvents || ''} 
+                    autoSize={{ minRows: 4, maxRows: 8 }}
+                    className="custom-form-input"
+                    placeholder="记录该角色与用户共同经历的重要里程碑事件（推荐以点列或时间线形式记录）..."
+                    onChange={(e) => handleFieldChange('keyEvents', e.target.value)}
+                  />
+                </div>
+              </Space>
+            </Card>
+          </Space>
+        )
       }
     ];
 

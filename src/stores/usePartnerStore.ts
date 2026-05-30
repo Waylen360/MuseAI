@@ -15,6 +15,7 @@ export interface PartnerItemFields {
 
   // 角色卡字段
   // 基础信息
+  name?: string;          // 姓名
   age?: string;           // 年龄
   gender?: string;        // 性别
   race?: string;          // 种族
@@ -53,6 +54,10 @@ export interface PartnerItemFields {
   
   // 典型反应
   typicalReactions?: string;
+
+  // 角色记忆
+  relationMemory?: string; // 关系记忆
+  keyEvents?: string;      // 关键事件
 }
 
 export interface PartnerItem {
@@ -118,7 +123,9 @@ export const compileItemToMarkdown = (name: string, type: 'world_book' | 'charac
       `## 背景故事\n${fields.backgroundStory || ''}\n\n` +
       `## 人际关系\n${fields.relationships || ''}\n\n` +
       `## 说话方式\n${fields.speakingStyle || ''}\n\n` +
-      `## 典型反应\n${fields.typicalReactions || ''}`;
+      `## 典型反应\n${fields.typicalReactions || ''}\n\n` +
+      `## 关系记忆\n${fields.relationMemory || ''}\n\n` +
+      `## 关键事件\n${fields.keyEvents || ''}`;
   }
 };
 
@@ -238,7 +245,9 @@ export const usePartnerStore = create<PartnerState>()(
           backgroundStory: '',
           relationships: '',
           speakingStyle: '',
-          typicalReactions: ''
+          typicalReactions: '',
+          relationMemory: '',
+          keyEvents: ''
         };
         const name = '未命名角色卡';
         const content = compileItemToMarkdown(name, 'character_card', defaultFields);

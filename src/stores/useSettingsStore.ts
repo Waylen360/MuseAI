@@ -23,6 +23,7 @@ export interface SettingsState {
   workSummaryPrompt: string;
   outlineCreationPrompt: string;
   outlineAssessmentPrompt: string;
+  partnerChatPrompt: string;
 
 
   worksDirectory: string | null;
@@ -43,6 +44,8 @@ export interface SettingsState {
   resetOutlineCreationPrompt: () => void;
   setOutlineAssessmentPrompt: (prompt: string) => void;
   resetOutlineAssessmentPrompt: () => void;
+  setPartnerChatPrompt: (prompt: string) => void;
+  resetPartnerChatPrompt: () => void;
 
   setWorksDirectory: (dir: string | null) => void;
   setArticleType: (type: string[]) => void;
@@ -413,6 +416,15 @@ export const defaultOutlineAssessmentPrompt = `你是一名资深的网文主编
 {"引流能力": 15.0, "开局钩子": 16.5, "设定新鲜感": 14.0, "情绪爽点密度": 18.0, "人设代入与话题性": 15.5, "优化建议": "大纲整体不错，但开局的冲突略显平淡，建议将退婚的情节提前，并增加主角的反击力度以提升爽点。"}
 `;
 
+export const defaultPartnerChatPrompt = `你将在此扮演一个特定的角色与用户进行沉浸式互动对话。你并非写作助手，而是一个处于特定故事世界中的真实实体。
+
+## 核心行为约束
+1. **严格扮演角色**：你必须彻底融入角色卡中的人设。你的说话语气、言行举止、内心防备、口癖和情绪反应，必须百分之百符合“角色卡”的设定。
+2. **严守世界观**：在对话中，你的认知、常识、所提到的地点和事件，必须严格局限在“世界书”定义的时空和规则内，不得出现任何脱离该世界的现代或无关信息。
+3. **自适应人物关系**：请认真研读“我（用户）的个人设定”。你的身份、职业、所处的社会阶层与用户的关系应当符合两张卡片的交叉定位。用符合人设的自然态度与用户对话（信任、防备、疏离或亲近）。
+4. **口语化与对话感**：始终使用符合角色性格的自然口语回复。避免书面化的冗长叙述，多用短句、对话和契合情境的微表情/微动作白描（可以使用括号标注动作或神态，例如：\`（轻挑眉梢）\`或\`（后退半步，警惕地看着你）\`）。
+5. **绝对禁用词**：不要在回复中提及任何关于“我是AI”、“我是语言模型”、“作为写作助手”、“以下是大纲”等出戏的系统性词汇。你就是一个活在那个世界里的真实存在。`;
+
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
@@ -428,6 +440,7 @@ export const useSettingsStore = create<SettingsState>()(
       workSummaryPrompt: defaultWorkSummaryPrompt,
       outlineCreationPrompt: defaultOutlineCreationPrompt,
       outlineAssessmentPrompt: defaultOutlineAssessmentPrompt,
+      partnerChatPrompt: defaultPartnerChatPrompt,
 
 
       worksDirectory: null,
@@ -438,6 +451,7 @@ export const useSettingsStore = create<SettingsState>()(
         remover: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
         outlineCreation: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
         outlineAssessment: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
+        partnerChat: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
       },
       articleType: ['男频', '长篇', '玄幻脑洞'],
 
@@ -477,6 +491,10 @@ export const useSettingsStore = create<SettingsState>()(
 
       resetOutlineAssessmentPrompt: () => set({ outlineAssessmentPrompt: defaultOutlineAssessmentPrompt }),
 
+      setPartnerChatPrompt: (prompt) => set({ partnerChatPrompt: prompt }),
+
+      resetPartnerChatPrompt: () => set({ partnerChatPrompt: defaultPartnerChatPrompt }),
+
 
 
       setWorksDirectory: (dir) => set({ worksDirectory: dir }),
@@ -484,7 +502,7 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'museai-settings-storage',
-      version: 7,
+      version: 8,
       partialize: (state) => {
         const { worksDirectory: _, ...rest } = state;
         return rest as SettingsState;
@@ -498,6 +516,7 @@ export const useSettingsStore = create<SettingsState>()(
           remover: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
           outlineCreation: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
           outlineAssessment: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
+          partnerChat: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
         };
         const migratedAgentConfigs = { ...defaultConfigs };
         const oldGlobalTemp = typeof state.temperature === 'number' ? state.temperature : 0.7;
@@ -539,6 +558,9 @@ export const useSettingsStore = create<SettingsState>()(
             || !state.outlineCreationPrompt.includes('短篇小说大纲的一般结构')
             ? defaultOutlineCreationPrompt
             : state.outlineCreationPrompt,
+          partnerChatPrompt: !state.partnerChatPrompt || state.partnerChatPrompt.includes('你是一个温柔、善解人意且富有才华的写作伴侣')
+            ? defaultPartnerChatPrompt
+            : state.partnerChatPrompt,
         };
         if (version < 2) {
           return { ...base, worksDirectory: null };

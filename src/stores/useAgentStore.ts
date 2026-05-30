@@ -46,6 +46,7 @@ export interface AgentSessionRecord extends AgentSessionSummary {
   selectedReferenceFiles: string[];
   selectedOutlineFile?: string | null;
   todos: AgentTodo[];
+  isArchived?: boolean;
 }
 
 function createSessionId() {

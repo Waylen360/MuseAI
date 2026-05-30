@@ -37,6 +37,9 @@ pub fn list_agent_sessions(
                 continue;
             }
         }
+        if record.id.starts_with("partner-session-") && record.is_archived != Some(true) {
+            continue;
+        }
         summaries.push(AgentSessionSummary {
             id: record.id,
             title: record.title,
@@ -292,4 +295,129 @@ pub fn stop_chat_stream(
         handle.abort();
     }
     Ok(())
+}
+
+fn clean_json_response(mut text: String) -> String {
+    text = text.trim().to_string();
+    if text.starts_with("```json") {
+        text = text.strip_prefix("```json").unwrap_or(&text).to_string();
+    } else if text.starts_with("```") {
+        text = text.strip_prefix("```").unwrap_or(&text).to_string();
+    }
+    if text.ends_with("```") {
+        text = text.strip_suffix("```").unwrap_or(&text).to_string();
+    }
+    text.trim().to_string()
+}
+
+#[tauri::command]
+pub async fn analyze_character_memory(request: AnalyzeMemoryRequest) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let system_prompt = "你是一个专门负责伴侣角色记忆管理的AI。你需要基于本次对话记录，以及原有的关系记忆、关键事件，来分析两者的改变，并输出本次会话的建议标题。请务必严格按照JSON格式返回。";
+    let user_prompt = format!(
+        "根据以下对话记录，分析并生成新的关系记忆、关键事件和建议的会话标题。\n\n\
+        ### 1. 本次聊天历史记录\n{}\n\n\
+        ### 2. 角色目前的关系记忆\n{}\n\n\
+        ### 3. 角色目前的关键事件记录\n{}\n\n\
+        请结合上述对话，分析：\n\
+        1. 关系记忆修改点：经过本次对话后，他们的关系应当怎样改变或加深？（如果是首次对话，基于对话分析并确立双方当前关系）。\n\
+        2. 关键事件修改点：本次对话是否发生了影响深远、具有里程碑或纪念性意义的共同经历？如果有，追加到已有的关键事件中；如果没有，保持原样。\n\
+        3. 会话标题：为本次会话起一个不超过15字、体现对话主题的合适标题。\n\n\
+        请以纯 JSON 格式输出，不要包含 markdown 格式标记（如 ```json）或额外的解释字眼。JSON 结构必须严格满足以下字段：\n\
+        {{\n  \
+          \"relationMemory\": \"更新后的完整关系记忆内容\",\n  \
+          \"keyEvents\": \"更新后的完整关键事件内容\",\n  \
+          \"sessionTitle\": \"本次会话的建议标题（不超过15个字）\",\n  \
+          \"relationChanges\": \"关于关系记忆的改变/修改点说明，如果没变请写'无修改'\",\n  \
+          \"eventChanges\": \"关于关键事件的改变/修改点说明，如果没变请写'无修改'\"\n\
+        }}",
+        request.chat_history,
+        request.current_relation,
+        request.current_events
+    );
+
+    let max_tokens = request.max_output_tokens.unwrap_or(2048);
+
+    let raw_content = match request.model_interface.as_str() {
+        "Anthropic-compatible" => {
+            let endpoint = build_anthropic_endpoint(&request.base_url);
+            let body = json!({
+                "model": request.model,
+                "messages": [{"role": "user", "content": user_prompt}],
+                "system": system_prompt,
+                "stream": false,
+                "temperature": request.temperature.unwrap_or(0.7),
+                "max_tokens": max_tokens,
+            });
+
+            let response = client
+                .post(&endpoint)
+                .header("x-api-key", &request.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body_text = response.text().await.unwrap_or_default();
+                return Err(format!("Anthropic 接口请求失败：{} {}", status, body_text));
+            }
+
+            let json: Value = response.json().await.map_err(|e| e.to_string())?;
+            json.get("content")
+                .and_then(|c| c.as_array())
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|item| item.get("type") == Some(&json!("text")))
+                })
+                .and_then(|text_block| text_block.get("text"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        }
+        _ => {
+            let endpoint = build_openai_endpoint(&request.base_url);
+            let messages = vec![
+                json!({"role": "system", "content": system_prompt}),
+                json!({"role": "user", "content": user_prompt}),
+            ];
+            let body = json!({
+                "model": request.model,
+                "messages": messages,
+                "stream": false,
+                "temperature": request.temperature.unwrap_or(0.7),
+                "max_tokens": max_tokens,
+            });
+
+            let response = client
+                .post(&endpoint)
+                .bearer_auth(&request.api_key)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body_text = response.text().await.unwrap_or_default();
+                return Err(format!("OpenAI 兼容接口请求失败：{} {}", status, body_text));
+            }
+
+            let json: Value = response.json().await.map_err(|e| e.to_string())?;
+            json.get("choices")
+                .and_then(|c| c.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|choice| choice.get("message"))
+                .and_then(|msg| msg.get("content"))
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        }
+    };
+
+    Ok(clean_json_response(raw_content))
 }

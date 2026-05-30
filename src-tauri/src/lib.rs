@@ -166,6 +166,7 @@ pub fn run() {
             delete_agent_session,
             summarize_text,
             update_agent_session_title,
+            analyze_character_memory,
             start_chat_completion_stream,
             import_skill,
             delete_skill,
