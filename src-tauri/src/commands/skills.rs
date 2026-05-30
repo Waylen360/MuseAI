@@ -11,8 +11,8 @@ use crate::utils::*;
 
 const BUILTIN_SKILL_NAMES: &[&str] = &[
     "kitt-writer",
-    "fanqie-short-nuexin-outline",
-    "fanqie-short-nuexin-writer",
+    "fanqie-short-zhuiqi-outline",
+    "fanqie-short-zhuiqi-writer",
     "fanqie-xuanhuan-outline",
     "fanqie-xuanhuan-writer",
 ];

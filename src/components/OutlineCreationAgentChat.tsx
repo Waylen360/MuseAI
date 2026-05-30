@@ -505,8 +505,8 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
     const mentionedSkillNames: string[] = [];
     if (articleTypeStr === '男频-长篇-玄幻脑洞') {
       mentionedSkillNames.push('fanqie-xuanhuan-outline');
-    } else if (articleTypeStr === '女频-短篇-虐心婚恋') {
-      mentionedSkillNames.push('fanqie-short-nuexin-outline');
+    } else if (articleTypeStr === '女频-短篇-追妻火葬场') {
+      mentionedSkillNames.push('fanqie-short-zhuiqi-outline');
     }
     const mentionedSkills = skills.filter(s => mentionedSkillNames.includes(s.name));
 
@@ -728,7 +728,7 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
                     {
                       value: '短篇',
                       label: '短篇',
-                      children: [{ value: '虐心婚恋', label: '虐心婚恋' }],
+                      children: [{ value: '追妻火葬场', label: '追妻火葬场' }],
                     },
                   ],
                 },

@@ -42,7 +42,7 @@ const ARTICLE_TYPE_OPTIONS = [
       {
         value: '短篇',
         label: '短篇',
-        children: [{ value: '虐心婚恋', label: '虐心婚恋' }],
+        children: [{ value: '追妻火葬场', label: '追妻火葬场' }],
       },
     ],
   },

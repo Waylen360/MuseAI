@@ -405,8 +405,8 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
     const mentionedSkillNames: string[] = [];
     if (articleTypeStr === '男频-长篇-玄幻脑洞') {
       mentionedSkillNames.push('fanqie-xuanhuan-writer');
-    } else if (articleTypeStr === '女频-短篇-虐心婚恋') {
-      mentionedSkillNames.push('fanqie-short-nuexin-writer');
+    } else if (articleTypeStr === '女频-短篇-追妻火葬场') {
+      mentionedSkillNames.push('fanqie-short-zhuiqi-writer');
     } else if (articleTypeStr === '公众号') {
       mentionedSkillNames.push('kitt-writer');
     }
@@ -649,7 +649,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
                     {
                       value: '短篇',
                       label: '短篇',
-                      children: [{ value: '虐心婚恋', label: '虐心婚恋' }],
+                      children: [{ value: '追妻火葬场', label: '追妻火葬场' }],
                     },
                   ],
                 },
