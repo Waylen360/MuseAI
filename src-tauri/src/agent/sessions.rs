@@ -74,7 +74,8 @@ pub fn save_agent_session(
 pub async fn summarize_text(request: SummarizeRequest) -> Result<String, String> {
     let client = reqwest::Client::new();
     let system_prompt =
-        "请用不超过8个字的简短标题概括用户提供的文本，只返回标题本身，不要加引号、标点或其他格式。";
+        "请使用用户输入的消息，总结用户意图，不超过15个字。务必注意，是总结用户意图，而不是回应用户的消息";
+    let user_prompt = format!("通过以下信息，总结意图，不超过15个字：{}", request.text);
     let max_tokens = request.max_output_tokens.unwrap_or(64).min(128);
 
     match request.model_interface.as_str() {
@@ -82,7 +83,7 @@ pub async fn summarize_text(request: SummarizeRequest) -> Result<String, String>
             let endpoint = build_anthropic_endpoint(&request.base_url);
             let body = json!({
                 "model": request.model,
-                "messages": [{"role": "user", "content": request.text}],
+                "messages": [{"role": "user", "content": user_prompt}],
                 "system": system_prompt,
                 "stream": false,
                 "temperature": request.temperature.unwrap_or(0.3),
@@ -130,7 +131,7 @@ pub async fn summarize_text(request: SummarizeRequest) -> Result<String, String>
             let endpoint = build_openai_endpoint(&request.base_url);
             let messages = vec![
                 json!({"role": "system", "content": system_prompt}),
-                json!({"role": "user", "content": request.text}),
+                json!({"role": "user", "content": user_prompt}),
             ];
             let body = json!({
                 "model": request.model,
@@ -194,6 +195,14 @@ pub fn update_agent_session_title(
         title: record.title,
         saved_at: record.saved_at,
     })
+}
+#[tauri::command]
+pub fn delete_agent_session(app: AppHandle, id: String) -> Result<(), String> {
+    let path = agent_session_path(&app, &id)?;
+    if path.exists() {
+        fs::remove_file(path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 #[tauri::command]
 pub fn start_chat_completion_stream(

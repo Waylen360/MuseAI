@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Tooltip, Input, Dropdown } from 'antd';
-import { BulbOutlined, CloseOutlined, HistoryOutlined, InfoCircleOutlined, PlayCircleOutlined, ReloadOutlined, RobotOutlined, StopOutlined, ToolOutlined } from '@ant-design/icons';
+import { Button, Tooltip, Input, Dropdown, message } from 'antd';
+import { BulbOutlined, CloseOutlined, HistoryOutlined, InfoCircleOutlined, PlayCircleOutlined, ReloadOutlined, RobotOutlined, StopOutlined, ToolOutlined, DeleteOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import ReactMarkdown from 'react-markdown';
@@ -167,6 +167,20 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
       }
     } catch (err) {
       console.error('打开历史会话失败:', err);
+    }
+  };
+
+  const handleDeleteSession = async (id: string) => {
+    try {
+      await invoke('delete_agent_session', { id });
+      message.success('已删除历史会话');
+      if (id === sessionIdRef.current) {
+        createNewSession();
+      }
+      await refreshSessions();
+    } catch (err) {
+      console.error('删除会话失败:', err);
+      message.error('删除会话失败');
     }
   };
 
@@ -407,6 +421,33 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
     onRunningChange?.(true);
     scrollToBottomOnce();
 
+    if (isRemover && shouldResetContext) {
+      const fallbackTitle = summarizeSessionTitle(textToSend);
+      sessionTitleRef.current = fallbackTitle;
+      setSessionTitle(fallbackTitle);
+      void saveCurrentSession();
+
+      invoke<string>('summarize_text', {
+        request: {
+          modelInterface: settings.modelInterface,
+          baseUrl: settings.llmBaseUrl,
+          apiKey: settings.llmApiKey,
+          model: settings.llmModel,
+          temperature: settings.temperature,
+          maxOutputTokens: 64,
+          text: textToSend,
+        },
+      }).then(async (generatedTitle) => {
+        const currentId = sessionIdRef.current;
+        sessionTitleRef.current = generatedTitle;
+        setSessionTitle(generatedTitle);
+        await invoke('update_agent_session_title', { id: currentId, title: generatedTitle });
+        await saveCurrentSession();
+      }).catch((e) => {
+        console.error('生成会话标题失败:', e);
+      });
+    }
+
     try {
       const runId = await invoke<string>('start_chat_completion_stream', {
         request: {
@@ -556,9 +597,22 @@ const DeAiAgentChat: React.FC<DeAiAgentChatProps> = ({
                   ? sessions.map((session) => ({
                       key: session.id,
                       label: (
-                        <div className="agent-session-menu-item">
-                          <strong>{session.title}</strong>
-                          <span>{formatSavedAt(session.savedAt)}</span>
+                        <div className="agent-session-menu-item" style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%', minWidth: 180, padding: '4px 0' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', marginRight: 16 }}>
+                            <strong style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{session.title}</strong>
+                            <span style={{ fontSize: '11px', color: '#999', marginTop: 2 }}>{formatSavedAt(session.savedAt)}</span>
+                          </div>
+                          <Button
+                            type="text"
+                            danger
+                            size="small"
+                            icon={<DeleteOutlined />}
+                            style={{ flexShrink: 0 }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleDeleteSession(session.id);
+                            }}
+                          />
                         </div>
                       ),
                     }))
@@ -867,6 +921,14 @@ function buildEstimatedSystemPrompt(
   ];
   lines.push(workspaceLines.join('\n'));
   return lines.filter(Boolean).join('\n\n');
+}
+
+function summarizeSessionTitle(firstMessage: string) {
+  const normalized = firstMessage.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return '新对话';
+  }
+  return normalized.length > 24 ? `${normalized.slice(0, 24)}...` : normalized;
 }
 
 function formatSavedAt(value: number) {

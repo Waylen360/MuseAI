@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Tooltip, Tag, Input, Cascader, Form, Modal, Tree, TreeSelect, Select, Empty, Dropdown } from 'antd';
-import { BulbOutlined, CloseOutlined, HistoryOutlined, InfoCircleOutlined, ReloadOutlined, RobotOutlined, StopOutlined, ToolOutlined, UnorderedListOutlined, SettingOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import { Button, Tooltip, Tag, Input, Cascader, Form, Modal, Tree, TreeSelect, Select, Empty, Dropdown, message } from 'antd';
+import { BulbOutlined, CloseOutlined, HistoryOutlined, InfoCircleOutlined, ReloadOutlined, RobotOutlined, StopOutlined, ToolOutlined, UnorderedListOutlined, SettingOutlined, PlayCircleOutlined, DeleteOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import ReactMarkdown from 'react-markdown';
@@ -65,6 +65,7 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
     sessionId, setSessionId,
     sessionTitle, setSessionTitle,
     sessions, setSessions,
+    createNewSession,
   } = useOutlineStore();
   const { skills, setSkills } = useAgentStore();
 
@@ -190,6 +191,20 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
       scrollToBottomOnce();
     } catch (err) {
       console.error('打开历史会话失败:', err);
+    }
+  };
+
+  const handleDeleteSession = async (id: string) => {
+    try {
+      await invoke('delete_agent_session', { id });
+      message.success('已删除历史会话');
+      if (id === sessionIdRef.current) {
+        createNewSession();
+      }
+      await refreshSessions();
+    } catch (err) {
+      console.error('删除会话失败:', err);
+      message.error('删除会话失败');
     }
   };
 
@@ -424,48 +439,9 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
   const [isConfirming, setIsConfirming] = useState(false);
   const [assessmentData, setAssessmentData] = useState<any>(null);
 
-  const startAgent = async (finalInputText: string) => {
+  const startAgent = async (finalInputText: string, originalInput: string) => {
     let { creationSelectedOutlineFile: selectedOutlineFile, creationActiveVersionId: activeVersionId } = useOutlineStore.getState();
     const isFirstUserMessage = !messages.some((message) => message.role === 'user');
-
-    if (isFirstUserMessage) {
-      const fallbackTitle = summarizeSessionTitle(finalInputText);
-      sessionTitleRef.current = fallbackTitle;
-      setSessionTitle(fallbackTitle);
-
-      invoke<string>('summarize_text', {
-        request: {
-          modelInterface: settings.modelInterface,
-          baseUrl: settings.llmBaseUrl,
-          apiKey: settings.llmApiKey,
-          model: settings.llmModel,
-          temperature: settings.temperature,
-          maxOutputTokens: 64,
-          text: finalInputText,
-        },
-      }).then((generatedTitle) => {
-        const currentId = sessionIdRef.current;
-        sessionTitleRef.current = generatedTitle;
-        setSessionTitle(generatedTitle);
-        void invoke('update_agent_session_title', { id: currentId, title: generatedTitle });
-        void refreshSessions();
-      }).catch(() => {
-        // Keep fallback title on generation failure
-      });
-    }
-
-    if (isFirstUserMessage && selectedOutlineFile) {
-      try {
-        const newVersion: any = await invoke('create_file_version', { path: selectedOutlineFile });
-        const v: any = await invoke('list_file_versions', { path: selectedOutlineFile });
-        const sorted = v.sort((a: any, b: any) => b.timestamp - a.timestamp);
-        useOutlineStore.getState().setCreationVersions(sorted);
-        useOutlineStore.getState().setCreationActiveVersionId(newVersion.id);
-        activeVersionId = newVersion.id;
-      } catch (err) {
-        console.error('Failed to create file version:', err);
-      }
-    }
 
     const versionPath = (selectedOutlineFile && activeVersionId) 
       ? (() => {
@@ -496,10 +472,52 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
     };
     const nextMessages = [...messages, userMessage, pendingAgentMessage];
 
+    messagesRef.current = nextMessages;
     setMessages(nextMessages);
     setInput('');
     setIsStreaming(true);
     scrollToBottomOnce();
+
+    if (isFirstUserMessage) {
+      const fallbackTitle = summarizeSessionTitle(originalInput);
+      sessionTitleRef.current = fallbackTitle;
+      setSessionTitle(fallbackTitle);
+      void saveCurrentSession();
+
+      // Background LLM title generation
+      invoke<string>('summarize_text', {
+        request: {
+          modelInterface: settings.modelInterface,
+          baseUrl: settings.llmBaseUrl,
+          apiKey: settings.llmApiKey,
+          model: settings.llmModel,
+          temperature: settings.temperature,
+          maxOutputTokens: 64,
+          text: originalInput,
+        },
+      }).then(async (generatedTitle) => {
+        const currentId = sessionIdRef.current;
+        sessionTitleRef.current = generatedTitle;
+        setSessionTitle(generatedTitle);
+        await invoke('update_agent_session_title', { id: currentId, title: generatedTitle });
+        await saveCurrentSession();
+      }).catch((e) => {
+        console.error('生成会话标题失败:', e);
+      });
+    }
+
+    if (isFirstUserMessage && selectedOutlineFile) {
+      try {
+        const newVersion: any = await invoke('create_file_version', { path: selectedOutlineFile });
+        const v: any = await invoke('list_file_versions', { path: selectedOutlineFile });
+        const sorted = v.sort((a: any, b: any) => b.timestamp - a.timestamp);
+        useOutlineStore.getState().setCreationVersions(sorted);
+        useOutlineStore.getState().setCreationActiveVersionId(newVersion.id);
+        activeVersionId = newVersion.id;
+      } catch (err) {
+        console.error('Failed to create file version:', err);
+      }
+    }
 
     const articleTypeStr = settings.articleType?.join('-') || '';
     const mentionedSkillNames: string[] = [];
@@ -560,7 +578,7 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
     const { creationSelectedOutlineFile: selectedOutlineFile, creationActiveVersionId: activeVersionId, creationVersions: versions } = useOutlineStore.getState();
 
     if (!selectedOutlineFile) {
-      await startAgent(trimmed);
+      await startAgent(trimmed, trimmed);
       return;
     }
 
@@ -578,14 +596,14 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
     }
     
     // No assessment data, directly start
-    await startAgent(`${trimmed}`);
+    await startAgent(trimmed, trimmed);
   };
 
   const confirmAssessmentSend = async () => {
     setIsConfirming(false);
     try {
       const promptAddon = `\n\n参考以下大纲评估意见进行优化：\n${JSON.stringify(assessmentData, null, 2)}`;
-      await startAgent(`${input.trim()}${promptAddon}`);
+      await startAgent(`${input.trim()}${promptAddon}`, input.trim());
     } catch (err) {
       console.error(err);
     }
@@ -815,7 +833,7 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
         </div>
         <div className="agent-chat__header-actions">
           <Tooltip title="清除当前上下文">
-            <Button type="text" icon={<ReloadOutlined />} onClick={() => { setMessages([]); setSessionTitle('新对话'); }} />
+            <Button type="text" icon={<ReloadOutlined />} onClick={createNewSession} />
           </Tooltip>
           <Dropdown
             menu={{
@@ -823,9 +841,22 @@ const OutlineCreationAgentChat: React.FC<AgentChatProps> = ({ onClose, title = '
                 ? sessions.map((session) => ({
                     key: session.id,
                     label: (
-                      <div className="agent-session-menu-item">
-                        <strong>{session.title}</strong>
-                        <span>{formatSavedAt(session.savedAt)}</span>
+                      <div className="agent-session-menu-item" style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%', minWidth: 180, padding: '4px 0' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', marginRight: 16 }}>
+                          <strong style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{session.title}</strong>
+                          <span style={{ fontSize: '11px', color: '#999', marginTop: 2 }}>{formatSavedAt(session.savedAt)}</span>
+                        </div>
+                        <Button
+                          type="text"
+                          danger
+                          size="small"
+                          icon={<DeleteOutlined />}
+                          style={{ flexShrink: 0 }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleDeleteSession(session.id);
+                          }}
+                        />
                       </div>
                     ),
                   }))

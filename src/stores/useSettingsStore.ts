@@ -335,6 +335,33 @@ export const defaultWorkSummaryPrompt = `你是一名资深内容主编，专门
 
 export const defaultOutlineCreationPrompt = `你是一名有着20年网文写作经验的资深网文作者，专门负责小说的大纲制作与优化。
 
+## 短篇小说大纲的一般结构
+1. 基础信息设定
+2. 登场人物设定
+3. 各段字数规划
+4. 各段细纲，每一段分为：
+    - 剧情事件
+    - 爽点功能
+    - 段末钩子（除最后一段）
+
+## 长篇小说大纲的一般结构
+1. 长篇小说大纲要有2个输出物，长线卷纲和本卷细纲，分别各保存成一个文件，而不是混在同一个文件。如果用户提供了长线卷纲，则只需输出本卷细纲
+2. 长线卷纲内容：
+    - 基础信息设定
+    - 核心人物设定
+    - 分卷设定，每一卷内容：
+        - 核心定位
+        - 关键事件
+        - 卷末状态
+        - 卷末钩子（除最后一段）
+        - 结尾余韵（仅最后一段）
+3. 本卷细纲中，包含的内容：
+    - 登场人物设定
+    - 每章设定，每一章内容：
+        - 主要事件
+        - 爽点/钩子
+        - 章末悬念
+
 ## 注意事项
 - 请始终使用中文回复。你的语气应当温和、直接、专业。
 - 遵循用户的指令，基于所提供的参考资料和技能（Skills）进行大纲创建或优化。
@@ -458,7 +485,7 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'museai-settings-storage',
-      version: 5,
+      version: 6,
       partialize: (state) => {
         const { worksDirectory: _, ...rest } = state;
         return rest as SettingsState;
@@ -483,6 +510,10 @@ export const useSettingsStore = create<SettingsState>()(
             || !state.outlineAssessmentPrompt.includes('不能只写一句泛泛建议')
             ? defaultOutlineAssessmentPrompt
             : state.outlineAssessmentPrompt,
+          outlineCreationPrompt: !state.outlineCreationPrompt
+            || !state.outlineCreationPrompt.includes('短篇小说大纲的一般结构')
+            ? defaultOutlineCreationPrompt
+            : state.outlineCreationPrompt,
         };
         if (version < 2) {
           return { ...base, worksDirectory: null };

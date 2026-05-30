@@ -163,6 +163,7 @@ pub fn run() {
             list_agent_sessions,
             load_agent_session,
             save_agent_session,
+            delete_agent_session,
             summarize_text,
             update_agent_session_title,
             start_chat_completion_stream,

@@ -115,6 +115,7 @@ pub struct AgentSessionMessage {
     pub content: String,
     pub thinking: Option<String>,
     pub tools: Option<Vec<AgentSessionTool>>,
+    pub thinking_blocks: Option<Vec<Value>>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

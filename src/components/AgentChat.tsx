@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Tooltip, Dropdown, Tag, Input, Cascader, Form, Modal, Tree, TreeSelect, Empty } from 'antd';
-import { BulbOutlined, CloseOutlined, HistoryOutlined, ReloadOutlined, RobotOutlined, StopOutlined, ToolOutlined, UnorderedListOutlined, SettingOutlined, PlayCircleOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import { Button, Tooltip, Dropdown, Tag, Input, Cascader, Form, Modal, Tree, TreeSelect, Empty, message } from 'antd';
+import { BulbOutlined, CloseOutlined, HistoryOutlined, ReloadOutlined, RobotOutlined, StopOutlined, ToolOutlined, UnorderedListOutlined, SettingOutlined, PlayCircleOutlined, InfoCircleOutlined, DeleteOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import ReactMarkdown from 'react-markdown';
@@ -352,34 +352,6 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
       return;
     }
 
-    const isFirstUserMessage = !messages.some((message) => message.role === 'user');
-    if (isFirstUserMessage) {
-      const fallbackTitle = summarizeSessionTitle(trimmed);
-      sessionTitleRef.current = fallbackTitle;
-      setSessionTitle(fallbackTitle);
-
-      // Background LLM title generation
-      invoke<string>('summarize_text', {
-        request: {
-          modelInterface: settings.modelInterface,
-          baseUrl: settings.llmBaseUrl,
-          apiKey: settings.llmApiKey,
-          model: settings.llmModel,
-          temperature: settings.temperature,
-          maxOutputTokens: 64,
-          text: trimmed,
-        },
-      }).then((generatedTitle) => {
-        const currentId = sessionIdRef.current;
-        sessionTitleRef.current = generatedTitle;
-        setSessionTitle(generatedTitle);
-        void invoke('update_agent_session_title', { id: currentId, title: generatedTitle });
-        void refreshSessions();
-      }).catch(() => {
-        // Keep fallback title on generation failure
-      });
-    }
-
     const userMessage: Message = {
       id: `msg-${Date.now()}`,
       role: 'user',
@@ -395,11 +367,40 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
       tools: [],
     };
     const nextMessages = [...messages, userMessage, pendingAgentMessage];
-
+    messagesRef.current = nextMessages;
     setMessages(nextMessages);
     setInput('');
     setIsStreaming(true);
     scrollToBottomOnce();
+
+    const isFirstUserMessage = !messages.some((message) => message.role === 'user');
+    if (isFirstUserMessage) {
+      const fallbackTitle = summarizeSessionTitle(trimmed);
+      sessionTitleRef.current = fallbackTitle;
+      setSessionTitle(fallbackTitle);
+      void saveCurrentSession();
+
+      // Background LLM title generation
+      invoke<string>('summarize_text', {
+        request: {
+          modelInterface: settings.modelInterface,
+          baseUrl: settings.llmBaseUrl,
+          apiKey: settings.llmApiKey,
+          model: settings.llmModel,
+          temperature: settings.temperature,
+          maxOutputTokens: 64,
+          text: trimmed,
+        },
+      }).then(async (generatedTitle) => {
+        const currentId = sessionIdRef.current;
+        sessionTitleRef.current = generatedTitle;
+        setSessionTitle(generatedTitle);
+        await invoke('update_agent_session_title', { id: currentId, title: generatedTitle });
+        await saveCurrentSession();
+      }).catch((e) => {
+        console.error('生成会话标题失败:', e);
+      });
+    }
 
     const articleTypeStr = settings.articleType?.join('-') || '';
     const mentionedSkillNames: string[] = [];
@@ -473,7 +474,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
 
   const refreshSessions = async () => {
     try {
-      const summaries = await invoke<AgentSessionSummary[]>('list_agent_sessions');
+      const summaries = await invoke<AgentSessionSummary[]>('list_agent_sessions', { prefix: 'session-' });
       setSessions(summaries);
     } catch (err) {
       console.error('读取历史会话失败:', err);
@@ -521,6 +522,20 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
       scrollToBottomOnce();
     } catch (err) {
       console.error('打开历史会话失败:', err);
+    }
+  };
+
+  const handleDeleteSession = async (id: string) => {
+    try {
+      await invoke('delete_agent_session', { id });
+      message.success('已删除历史会话');
+      if (id === sessionIdRef.current) {
+        createNewSession();
+      }
+      await refreshSessions();
+    } catch (err) {
+      console.error('删除会话失败:', err);
+      message.error('删除会话失败');
     }
   };
 
@@ -730,9 +745,22 @@ const AgentChat: React.FC<AgentChatProps> = ({ onClose, title = '写文章Agent'
                 ? sessions.map((session) => ({
                     key: session.id,
                     label: (
-                      <div className="agent-session-menu-item">
-                        <strong>{session.title}</strong>
-                        <span>{formatSavedAt(session.savedAt)}</span>
+                      <div className="agent-session-menu-item" style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%', minWidth: 180, padding: '4px 0' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', marginRight: 16 }}>
+                          <strong style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{session.title}</strong>
+                          <span style={{ fontSize: '11px', color: '#999', marginTop: 2 }}>{formatSavedAt(session.savedAt)}</span>
+                        </div>
+                        <Button
+                          type="text"
+                          danger
+                          size="small"
+                          icon={<DeleteOutlined />}
+                          style={{ flexShrink: 0 }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleDeleteSession(session.id);
+                          }}
+                        />
                       </div>
                     ),
                   }))

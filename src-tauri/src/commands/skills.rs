@@ -60,6 +60,19 @@ fn sync_builtin_skills(app: &AppHandle, skills_dir: &Path) -> Result<(), String>
     let source_dir = builtin_skills_source_dir(app)?;
     fs::create_dir_all(skills_dir).map_err(|e| e.to_string())?;
 
+    // 清理已被废弃/重命名的旧内置技能
+    let obsolete_skills = vec!["fanqie-short-nuexin-outline", "fanqie-short-nuexin-writer"];
+    for skill_name in obsolete_skills {
+        let obsolete_path = skills_dir.join(skill_name);
+        if obsolete_path.exists() {
+            if obsolete_path.is_dir() {
+                let _ = fs::remove_dir_all(&obsolete_path);
+            } else {
+                let _ = fs::remove_file(&obsolete_path);
+            }
+        }
+    }
+
     for skill_name in BUILTIN_SKILL_NAMES {
         let source = source_dir.join(skill_name);
         if !source.join("SKILL.md").is_file() {
@@ -84,7 +97,20 @@ fn builtin_skills_source_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .path()
         .resolve("skills", BaseDirectory::Resource)
         .map_err(|e| e.to_string())?;
+
+    let mut bundled_has_all = true;
     if bundled.is_dir() {
+        for skill_name in BUILTIN_SKILL_NAMES {
+            if !bundled.join(skill_name).join("SKILL.md").is_file() {
+                bundled_has_all = false;
+                break;
+            }
+        }
+    } else {
+        bundled_has_all = false;
+    }
+
+    if bundled_has_all {
         return Ok(bundled);
     }
 

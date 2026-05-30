@@ -817,7 +817,8 @@ pub fn assemble_system_prompt(
         get_python_info()
     ));
 
-    let skills = discover_skills(app);
+    let mut skills = discover_skills(app);
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
     if skills.is_empty() {
         prompt.push_str("  （无可用 skill）\n");
     } else {
