@@ -152,9 +152,32 @@ pub struct AnalyzeMemoryRequest {
     pub model: String,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
+    pub thinking_depth: Option<String>,
     pub chat_history: String,
-    pub current_relation: String,
+    pub current_user_relation_type: String,
+    pub current_user_interaction_model: String,
+    pub current_user_relation_bottom_line: String,
     pub current_events: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateBackgroundItemsRequest {
+    pub model_interface: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub text: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OptimizeCharacterMemoriesRequest {
+    pub model_interface: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub text: String,
 }
 
 #[derive(Clone, Serialize)]

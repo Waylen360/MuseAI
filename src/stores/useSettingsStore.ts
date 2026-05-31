@@ -24,6 +24,7 @@ export interface SettingsState {
   outlineCreationPrompt: string;
   outlineAssessmentPrompt: string;
   partnerChatPrompt: string;
+  storyAgentPrompt: string;
 
 
   worksDirectory: string | null;
@@ -46,6 +47,8 @@ export interface SettingsState {
   resetOutlineAssessmentPrompt: () => void;
   setPartnerChatPrompt: (prompt: string) => void;
   resetPartnerChatPrompt: () => void;
+  setStoryAgentPrompt: (prompt: string) => void;
+  resetStoryAgentPrompt: () => void;
 
   setWorksDirectory: (dir: string | null) => void;
   setArticleType: (type: string[]) => void;
@@ -425,6 +428,20 @@ export const defaultPartnerChatPrompt = `你将在此扮演一个特定的角色
 4. **口语化与对话感**：始终使用符合角色性格的自然口语回复。避免书面化的冗长叙述，多用短句、对话和契合情境的微表情/微动作白描（可以使用括号标注动作或神态，例如：\`（轻挑眉梢）\`或\`（后退半步，警惕地看着你）\`）。
 5. **绝对禁用词**：不要在回复中提及任何关于“我是AI”、“我是语言模型”、“作为写作助手”、“以下是大纲”等出戏的系统性词汇。你就是一个活在那个世界里的真实存在。`;
 
+export const defaultStoryAgentPrompt = `你将在此扮演一个专门的故事主持人（DM/GM）和优秀的故事讲述者，与用户一起进行沉浸式的文字冒险/跑团游戏。你并非普通的写作助手，你也是这个世界的造物主和观察者。
+
+## 核心行为约束
+1. **沉浸式叙事**：你的回复必须包含精彩的“旁白描写（环境、氛围、角色的细节神态动作）”以及“角色对话”。你的描写应当充满画面感和人情味。
+2. **严守故事设定**：在故事推进中，你的常识、叙述、提到的NPC与发生的事件，必须严格局限在用户选择的“世界书”设定的时代、规则与冲突框架内，不得出现出戏的现代科技或无关常识。
+3. **NPC角色契合度**：故事里可能包含多个活跃的NPC（由用户勾选的角色卡定义）。当你代为叙述或扮演这些NPC说话时，必须百分之百遵循他们各自的设定（语气、性格、身份、口头禅等）。
+4. **绝不代替用户角色做决定**：你可以扮演世界里的所有NPC并控制客观自然现象，但你绝对不能越俎代庖去代替“我（用户）”的角色做选择、说台词或擅自动手，必须把决定权留给用户。
+5. **适应用户输入模式**：用户每次发送的消息有三种不同前缀标记，分别代表不同类型的行动：
+   - 【说话】：这是用户角色的直接言语。
+   - 【行为】：这是用户角色作出的动作或试探性尝试。
+   - 【剧情推进】：这是用户以旁白客观口吻提出的后续剧情发生的方向或世界巧合。
+   你必须理解并顺着用户的这些输入类型，合理流畅地展开后续剧情。
+6. **绝对禁用词**：严禁在回复中提及任何诸如“我是AI模型”、“让我们继续大纲”、“这是一场游戏”等出戏的系统性词汇。保持沉浸式的冒险体验。`;
+
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
@@ -441,6 +458,7 @@ export const useSettingsStore = create<SettingsState>()(
       outlineCreationPrompt: defaultOutlineCreationPrompt,
       outlineAssessmentPrompt: defaultOutlineAssessmentPrompt,
       partnerChatPrompt: defaultPartnerChatPrompt,
+      storyAgentPrompt: defaultStoryAgentPrompt,
 
 
       worksDirectory: null,
@@ -452,6 +470,7 @@ export const useSettingsStore = create<SettingsState>()(
         outlineCreation: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
         outlineAssessment: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
         partnerChat: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
+        storyAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
       },
       articleType: ['男频', '长篇', '玄幻脑洞'],
 
@@ -495,6 +514,10 @@ export const useSettingsStore = create<SettingsState>()(
 
       resetPartnerChatPrompt: () => set({ partnerChatPrompt: defaultPartnerChatPrompt }),
 
+      setStoryAgentPrompt: (prompt) => set({ storyAgentPrompt: prompt }),
+
+      resetStoryAgentPrompt: () => set({ storyAgentPrompt: defaultStoryAgentPrompt }),
+
 
 
       setWorksDirectory: (dir) => set({ worksDirectory: dir }),
@@ -517,6 +540,7 @@ export const useSettingsStore = create<SettingsState>()(
           outlineCreation: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
           outlineAssessment: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
           partnerChat: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
+          storyAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
         };
         const migratedAgentConfigs = { ...defaultConfigs };
         const oldGlobalTemp = typeof state.temperature === 'number' ? state.temperature : 0.7;
@@ -561,6 +585,9 @@ export const useSettingsStore = create<SettingsState>()(
           partnerChatPrompt: !state.partnerChatPrompt || state.partnerChatPrompt.includes('你是一个温柔、善解人意且富有才华的写作伴侣')
             ? defaultPartnerChatPrompt
             : state.partnerChatPrompt,
+          storyAgentPrompt: !state.storyAgentPrompt
+            ? defaultStoryAgentPrompt
+            : state.storyAgentPrompt,
         };
         if (version < 2) {
           return { ...base, worksDirectory: null };

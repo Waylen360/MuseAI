@@ -7,6 +7,7 @@ import Outline from './pages/Outline';
 import Examples from './pages/Examples';
 import Background from './pages/Background';
 import Chat from './pages/Chat';
+import Story from './pages/Story';
 import { useSettingsStore } from './stores/useSettingsStore';
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect } from 'react';
@@ -32,6 +33,7 @@ function App() {
           <Route path="outline" element={<Outline />} />
           <Route path="background" element={<Background />} />
           <Route path="chat" element={<Chat />} />
+          <Route path="story" element={<Story />} />
         </Route>
       </Routes>
     </Router>

@@ -183,6 +183,8 @@ pub fn run() {
             crawl_fanqie_article,
             create_untitled_item,
             build_full_system_prompt,
+            generate_background_items,
+            optimize_character_memories,
         ])
         .manage(ActiveStreams(Mutex::new(HashMap::new())))
         .run(tauri::generate_context!())

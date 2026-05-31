@@ -1,6 +1,6 @@
 import React from 'react';
 import { Form, Input, Button, InputNumber, Divider, Typography, Select, message, Anchor, Card } from 'antd';
-import { SettingOutlined, BookOutlined, DeploymentUnitOutlined, SafetyCertificateOutlined, AlertOutlined, MessageOutlined } from '@ant-design/icons';
+import { SettingOutlined, BookOutlined, DeploymentUnitOutlined, ClearOutlined, ProfileOutlined, GlobalOutlined, MessageOutlined, CompassOutlined } from '@ant-design/icons';
 import {
   useSettingsStore,
   defaultSystemPrompt,
@@ -10,6 +10,7 @@ import {
   defaultOutlineCreationPrompt,
   defaultOutlineAssessmentPrompt,
   defaultPartnerChatPrompt,
+  defaultStoryAgentPrompt,
 } from '../stores/useSettingsStore';
 
 const { Title } = Typography;
@@ -280,6 +281,7 @@ const Settings: React.FC = () => {
           items={[
             { key: 'background-config', href: '#background-config', title: '背景页设置' },
             { key: 'partner-chat-config', href: '#partner-chat-config', title: '聊天页设置' },
+            { key: 'story-agent-config', href: '#story-agent-config', title: '故事页设置' },
           ]}
         />
       </div>
@@ -288,7 +290,7 @@ const Settings: React.FC = () => {
       <div id="settings-scroll-container" style={{ flex: 1, padding: '40px 48px', overflowY: 'auto', paddingBottom: 120 }}>
         <div style={{ maxWidth: 800, margin: '0 auto' }}>
           
-          <Title level={2} style={{ fontWeight: 600, color: '#33312e', marginBottom: 40, letterSpacing: '-0.5px' }}>
+          <Title level={2} style={{ fontWeight: 600, color: '#33312e', marginBottom: 40, letterSpacing: '-0.5px', fontFamily: '"Inter", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
             设置
           </Title>
 
@@ -296,7 +298,7 @@ const Settings: React.FC = () => {
           <section id="model-config" style={{ marginBottom: 48 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
               <SettingOutlined style={{ fontSize: '20px', color: '#d97757' }} />
-              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600 }}>全局模型设置</Title>
+              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600, fontFamily: '"Inter", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>全局模型设置</Title>
             </div>
             
             <Card
@@ -374,7 +376,7 @@ const Settings: React.FC = () => {
           <section id="works-config" style={{ marginBottom: 48 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
               <BookOutlined style={{ fontSize: '20px', color: '#d97757' }} />
-              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600 }}>作品页设置</Title>
+              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600, fontFamily: '"Inter", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>作品页设置</Title>
             </div>
 
             <AgentSettingCard
@@ -403,8 +405,8 @@ const Settings: React.FC = () => {
           {/* 大纲页设置区域 */}
           <section id="outline-config" style={{ marginBottom: 48 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
-              <AlertOutlined style={{ fontSize: '20px', color: '#d97757' }} />
-              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600 }}>大纲页设置</Title>
+              <ProfileOutlined style={{ fontSize: '20px', color: '#d97757' }} />
+              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600, fontFamily: '"Inter", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>大纲页设置</Title>
             </div>
 
             <AgentSettingCard
@@ -433,8 +435,8 @@ const Settings: React.FC = () => {
           {/* 去AI味页设置区域 */}
           <section id="deai-config" style={{ marginBottom: 48 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
-              <SafetyCertificateOutlined style={{ fontSize: '20px', color: '#d97757' }} />
-              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600 }}>去AI味页设置</Title>
+              <ClearOutlined style={{ fontSize: '20px', color: '#d97757' }} />
+              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600, fontFamily: '"Inter", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>去AI味页设置</Title>
             </div>
 
             <AgentSettingCard
@@ -463,8 +465,8 @@ const Settings: React.FC = () => {
           {/* 背景页设置区域 */}
           <section id="background-config" style={{ marginBottom: 48 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
-              <BookOutlined style={{ fontSize: '20px', color: '#d97757' }} />
-              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600 }}>背景页设置</Title>
+              <GlobalOutlined style={{ fontSize: '20px', color: '#d97757' }} />
+              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600, fontFamily: '"Inter", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>背景页设置</Title>
             </div>
 
             <Card
@@ -493,7 +495,7 @@ const Settings: React.FC = () => {
           <section id="partner-chat-config" style={{ marginBottom: 48 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
               <MessageOutlined style={{ fontSize: '20px', color: '#d97757' }} />
-              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600 }}>聊天页设置</Title>
+              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600, fontFamily: '"Inter", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>聊天页设置</Title>
             </div>
 
             <AgentSettingCard
@@ -504,6 +506,26 @@ const Settings: React.FC = () => {
               onSavePrompt={store.setPartnerChatPrompt}
               onResetPrompt={store.resetPartnerChatPrompt}
               helpText="此提示词将作为伴侣聊天室中聊天 Agent 的核心系统提示词。结尾将自动且优雅地嵌入用户选择的世界书、角色卡和个人信息。"
+            />
+          </section>
+
+          <Divider style={{ borderColor: '#eae6df', margin: '48px 0' }} />
+
+          {/* 故事页设置区域 */}
+          <section id="story-agent-config" style={{ marginBottom: 48 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
+              <CompassOutlined style={{ fontSize: '20px', color: '#d97757' }} />
+              <Title level={4} style={{ color: '#33312e', margin: 0, fontWeight: 600, fontFamily: '"Inter", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>故事页设置</Title>
+            </div>
+
+            <AgentSettingCard
+              title="故事 Agent"
+              agentId="storyAgent"
+              defaultPrompt={defaultStoryAgentPrompt}
+              currentPrompt={store.storyAgentPrompt}
+              onSavePrompt={store.setStoryAgentPrompt}
+              onResetPrompt={store.resetStoryAgentPrompt}
+              helpText="此提示词将作为跑团/文字冒险故事中故事 Agent（主持GM）的核心系统提示词。结尾将自动且优雅地嵌入用户选择的世界书、多个角色卡和个人信息。第一条用户消息为填入的初始剧情。"
             />
           </section>
 

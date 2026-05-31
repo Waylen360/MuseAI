@@ -1,18 +1,19 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Tooltip, Dropdown, Tag, Input, message, Modal, Spin } from 'antd';
+import { Button, Tooltip, Dropdown, Tag, Input, message, Modal, Spin, Select, Radio, Checkbox } from 'antd';
 import {
   BulbOutlined,
   HistoryOutlined,
   ReloadOutlined,
-  MessageOutlined,
+  CompassOutlined,
   StopOutlined,
-  SettingOutlined,
   PlayCircleOutlined,
   InfoCircleOutlined,
   DeleteOutlined,
   UserOutlined,
-  BookOutlined,
   FileProtectOutlined,
+  CommentOutlined,
+  ExperimentOutlined,
+  BranchesOutlined,
   RedoOutlined,
   EditOutlined
 } from '@ant-design/icons';
@@ -23,9 +24,8 @@ import remarkGfm from 'remark-gfm';
 
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { usePartnerStore } from '../stores/usePartnerStore';
-import { usePartnerChatStore } from '../stores/usePartnerChatStore';
+import { useStoryStore } from '../stores/useStoryStore';
 import { Message, AgentSessionSummary, AgentSessionRecord } from '../stores/useAgentStore';
-import { PartnerChatSettingsModal } from '../components/PartnerChatSettingsModal';
 
 interface ChatStreamEvent {
   runId: string;
@@ -63,20 +63,23 @@ const USER_INFO_LABELS: Record<string, string> = {
   typicalReactions: '典型反应'
 };
 
-const compileEffectiveSystemPrompt = (
+const compileStorySystemPrompt = (
   basePrompt: string,
   worldBookContent: string | null,
-  characterCardContent: string | null,
+  characterCardContents: string[],
   userInfo: Record<string, any>
 ): string => {
   let prompt = basePrompt.trim();
 
   if (worldBookContent && worldBookContent.trim()) {
-    prompt += `\n\n## 伴侣对话世界设定\n请严格遵守以下世界背景设定展开对话，不要脱离该设定范围：\n${worldBookContent.trim()}`;
+    prompt += `\n\n## 故事主世界背景设定\n请严格遵守以下世界背景设定展开叙事，不要脱离该设定范围：\n${worldBookContent.trim()}`;
   }
 
-  if (characterCardContent && characterCardContent.trim()) {
-    prompt += `\n\n## 你的角色人设设定（伴侣设定）\n你必须始终扮演此角色，语气、动作、口吻、心防与性格应与本卡高度一致：\n${characterCardContent.trim()}`;
+  if (characterCardContents.length > 0) {
+    prompt += `\n\n## 故事参与活跃角色设定（背景NPC设定）\n以下是本次冒险中参与互动的活跃NPC角色设定，你扮演这些角色时，语气、言行举止与动作必须与人设高度一致：`;
+    characterCardContents.forEach((content, index) => {
+      prompt += `\n\n【NPC角色 ${index + 1}】\n${content.trim()}`;
+    });
   }
 
   const userFields = Object.entries(userInfo)
@@ -85,7 +88,7 @@ const compileEffectiveSystemPrompt = (
     .join('\n');
 
   if (userFields) {
-    prompt += `\n\n## 我（用户）的角色人设设定\n这是与你对话的用户人设背景，请记住并据此采取对应的人物关系态度和说话方式：\n${userFields}`;
+    prompt += `\n\n## 我（用户）的角色人设设定\n这是用户所扮演的冒险主角人设设定，请记住此人设并以此决定NPC们对他的态度与互动反应：\n${userFields}`;
   }
 
   return prompt;
@@ -103,47 +106,52 @@ const estimateContextUsage = (systemPrompt: string, messages: Message[], draft: 
   };
 };
 
-const Chat: React.FC = () => {
+const Story: React.FC = () => {
   const {
     messages, setMessages,
     input, setInput,
+    inputMode, setInputMode,
     isStreaming, setIsStreaming,
     expandedBlocks, setExpandedBlocks,
-    selectedWorldBookId, selectedCharacterCardId,
-    userInfo,
+    selectedWorldBookId, setSelectedWorldBookId,
+    selectedCharacterCardIds, setSelectedCharacterCardIds,
     sessions, setSessions,
     sessionId, setSessionId,
     sessionTitle, setSessionTitle,
     activeRun, setActiveRun,
-    createNewSession,
-    isSessionArchived, setIsSessionArchived
-  } = usePartnerChatStore();
+    isSessionArchived, setIsSessionArchived,
+    initialPlot, setInitialPlot,
+    createNewSession
+  } = useStoryStore();
 
-  const { worldBooks, characterCards, updateItemFields } = usePartnerStore();
+  const { worldBooks, characterCards, updateItemFields, selectItem } = usePartnerStore();
   const settings = useSettingsStore();
 
   const chatHistoryRef = useRef<HTMLDivElement>(null);
   const currentThinkingIdRef = useRef<string | null>(null);
-  
+
   const activeRunRef = useRef(activeRun);
   const messagesRef = useRef(messages);
   const sessionIdRef = useRef(sessionId);
   const sessionTitleRef = useRef(sessionTitle);
   const isSessionArchivedRef = useRef(isSessionArchived);
 
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isArchiveModalOpen, setIsArchiveModalOpen] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [archiveAnalysis, setArchiveAnalysis] = useState<any>(null);
+  const [archiveAnalyses, setArchiveAnalyses] = useState<Record<string, any>>({});
+  const [selectedTargetCardId, setSelectedTargetCardId] = useState<string>('');
 
   const [editedTitle, setEditedTitle] = useState('');
-  const [editedRelationType, setEditedRelationType] = useState('');
-  const [editedRelationModel, setEditedRelationModel] = useState('');
-  const [editedRelationBottomLine, setEditedRelationBottomLine] = useState('');
-  const [editedEvents, setEditedEvents] = useState('');
+  const [editedRelationTypes, setEditedRelationTypes] = useState<Record<string, string>>({});
+  const [editedRelationModels, setEditedRelationModels] = useState<Record<string, string>>({});
+  const [editedRelationBottomLines, setEditedRelationBottomLines] = useState<Record<string, string>>({});
+  const [editedEventsMap, setEditedEventsMap] = useState<Record<string, string>>({});
 
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState('');
+
+  const [tempSelectedCardIds, setTempSelectedCardIds] = useState<string[]>([]);
+  const [hasStartedAnalysis, setHasStartedAnalysis] = useState(false);
 
   useEffect(() => { activeRunRef.current = activeRun; }, [activeRun]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -164,7 +172,7 @@ const Chat: React.FC = () => {
       if (!isMounted) return;
       const activeRun = activeRunRef.current;
       const payload = event.payload;
-      
+
       if (!activeRun.runId || payload.runId !== activeRun.runId || !activeRun.messageId) {
         return;
       }
@@ -184,7 +192,7 @@ const Chat: React.FC = () => {
           if (msg.id !== activeRun.messageId) return msg;
           let newContent = msg.content;
           const newThinkingBlocks = [...(msg.thinkingBlocks ?? [])];
-          
+
           if (!currentThinkingIdRef.current) {
             currentThinkingIdRef.current = `thinking-${Date.now()}`;
             newContent += `\n\n[[THINKING:${currentThinkingIdRef.current}]]\n\n`;
@@ -199,11 +207,11 @@ const Chat: React.FC = () => {
             }
           }
 
-          return { 
-            ...msg, 
-            content: newContent, 
+          return {
+            ...msg,
+            content: newContent,
             thinkingBlocks: newThinkingBlocks,
-            thinking: `${msg.thinking ?? ''}${payload.delta}` 
+            thinking: `${msg.thinking ?? ''}${payload.delta}`
           };
         }));
         return;
@@ -228,7 +236,7 @@ const Chat: React.FC = () => {
         currentThinkingIdRef.current = null;
         setMessages((prev) => prev.map((msg) => (
           msg.id === activeRun.messageId
-            ? { ...msg, content: payload.message ? `请求模型失败：${payload.message}` : '请求模型失败' }
+            ? { ...msg, content: payload.message ? `冒险推演失败：${payload.message}` : '冒险推演失败' }
             : msg
         )));
         activeRunRef.current = { runId: null, messageId: null };
@@ -272,25 +280,120 @@ const Chat: React.FC = () => {
   }, [messages.length]);
 
   const selectedWorldBook = worldBooks.find(wb => wb.id === selectedWorldBookId) || null;
-  const selectedCharacterCard = characterCards.find(cc => cc.id === selectedCharacterCardId) || null;
+  const selectedCards = characterCards.filter(cc => selectedCharacterCardIds.includes(cc.id));
 
   // Compile final Prompt
-  const baseSystemPrompt = settings.partnerChatPrompt || '';
-  const effectiveSystemPrompt = compileEffectiveSystemPrompt(
+  const baseSystemPrompt = settings.storyAgentPrompt || '';
+  const effectiveSystemPrompt = compileStorySystemPrompt(
     baseSystemPrompt,
     selectedWorldBook ? selectedWorldBook.content : null,
-    selectedCharacterCard ? selectedCharacterCard.content : null,
-    userInfo
+    selectedCards.map(c => c.content),
+    useSettingsStore.getState().systemPrompt ? {} : {} // Fallback empty or we'll inject user setting info
   );
+
+  const startAdventure = async () => {
+    if (!selectedWorldBookId || !initialPlot.trim()) {
+      message.warning('请先选择世界书并输入初始剧情设定！');
+      return;
+    }
+
+    const formattedPlot = initialPlot.trim();
+    const userMessage: Message = {
+      id: `msg-${Date.now()}`,
+      role: 'user',
+      content: formattedPlot,
+      tools: []
+    };
+    const agentMessageId = `msg-${Date.now() + 1}`;
+    const pendingAgentMessage: Message = {
+      id: agentMessageId,
+      role: 'agent',
+      content: '',
+      tools: []
+    };
+
+    const nextMessages = [userMessage, pendingAgentMessage];
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+
+    // Initial fallback title
+    const fallbackTitle = formattedPlot.length > 15 ? `${formattedPlot.slice(0, 15)}...` : formattedPlot;
+    sessionTitleRef.current = fallbackTitle;
+    setSessionTitle(fallbackTitle);
+    setIsStreaming(true);
+
+    // Try background title summary
+    invoke<string>('summarize_text', {
+      request: {
+        modelInterface: settings.modelInterface,
+        baseUrl: settings.llmBaseUrl,
+        apiKey: settings.llmApiKey,
+        model: settings.llmModel,
+        temperature: settings.agentConfigs?.storyAgent?.temperature ?? 0.7,
+        maxOutputTokens: 64,
+        text: formattedPlot,
+      },
+    }).then(async (generatedTitle) => {
+      const currentId = sessionIdRef.current;
+      sessionTitleRef.current = generatedTitle;
+      setSessionTitle(generatedTitle);
+      await invoke('update_agent_session_title', { id: currentId, title: generatedTitle });
+      await saveCurrentSession();
+    }).catch((e) => {
+      console.error('生成冒险标题失败:', e);
+    });
+
+    try {
+      const runId = await invoke<string>('start_chat_completion_stream', {
+        request: {
+          modelInterface: settings.modelInterface,
+          baseUrl: settings.llmBaseUrl,
+          apiKey: settings.llmApiKey,
+          model: settings.llmModel,
+          temperature: settings.agentConfigs?.storyAgent?.temperature ?? 0.7,
+          maxOutputTokens: settings.agentConfigs?.storyAgent?.maxOutputTokens ?? 4096,
+          maxContextTokens: settings.agentConfigs?.storyAgent?.maxContextTokens ?? 128000,
+          thinkingDepth: settings.agentConfigs?.storyAgent?.thinkingDepth ?? 'off',
+          systemPrompt: effectiveSystemPrompt,
+          workspacePath: null,
+          messages: [{ role: 'user', content: formattedPlot }],
+          selectedReferenceFiles: [],
+          allowedTools: []
+        }
+      });
+
+      activeRunRef.current = { runId, messageId: agentMessageId };
+      setActiveRun({ runId, messageId: agentMessageId });
+    } catch (err) {
+      activeRunRef.current = { runId: null, messageId: null };
+      setActiveRun({ runId: null, messageId: null });
+      setIsStreaming(false);
+      setMessages((prev) => prev.map((msg) => (
+        msg.id === agentMessageId
+          ? { ...msg, content: `请求冒险发生故障：${String(err)}` }
+          : msg
+      )));
+    }
+  };
 
   const handleSend = async () => {
     const trimmed = input.trim();
     if (!trimmed || isStreaming) return;
 
+    // Apply input format rules based on mode
+    let formattedText = trimmed;
+    if (inputMode === 'speech') {
+      formattedText = `我：“${trimmed}”`;
+    } else if (inputMode === 'behavior') {
+      formattedText = `（我 ${trimmed}）`;
+    } else if (inputMode === 'plot') {
+      formattedText = `[剧情推进] ${trimmed}`;
+    }
+
     const userMessage: Message = {
       id: `msg-${Date.now()}`,
       role: 'user',
-      content: trimmed,
+      content: formattedText,
       tools: []
     };
     const agentMessageId = `msg-${Date.now() + 1}`;
@@ -308,37 +411,7 @@ const Chat: React.FC = () => {
     setIsStreaming(true);
     scrollToBottomOnce();
 
-    const isFirstUserMessage = !messages.some(m => m.role === 'user');
-    if (isFirstUserMessage) {
-      const fallbackTitle = trimmed.length > 24 ? `${trimmed.slice(0, 24)}...` : trimmed;
-      sessionTitleRef.current = fallbackTitle;
-      setSessionTitle(fallbackTitle);
-      void saveCurrentSession();
-
-      // Background title summarization
-      invoke<string>('summarize_text', {
-        request: {
-          modelInterface: settings.modelInterface,
-          baseUrl: settings.llmBaseUrl,
-          apiKey: settings.llmApiKey,
-          model: settings.llmModel,
-          temperature: settings.agentConfigs?.partnerChat?.temperature ?? 0.7,
-          maxOutputTokens: 64,
-          text: trimmed,
-        },
-      }).then(async (generatedTitle) => {
-        const currentId = sessionIdRef.current;
-        sessionTitleRef.current = generatedTitle;
-        setSessionTitle(generatedTitle);
-        await invoke('update_agent_session_title', { id: currentId, title: generatedTitle });
-        await saveCurrentSession();
-      }).catch((e) => {
-        console.error('生成伴侣会话标题失败:', e);
-      });
-    }
-
     try {
-      // Map Zustand Messages to LLM API message schema
       const modelMessages = nextMessages.slice(0, -1).map(msg => ({
         role: msg.role === 'user' ? 'user' as const : 'assistant' as const,
         content: msg.content
@@ -350,15 +423,15 @@ const Chat: React.FC = () => {
           baseUrl: settings.llmBaseUrl,
           apiKey: settings.llmApiKey,
           model: settings.llmModel,
-          temperature: settings.agentConfigs?.partnerChat?.temperature ?? 0.7,
-          maxOutputTokens: settings.agentConfigs?.partnerChat?.maxOutputTokens ?? 4096,
-          maxContextTokens: settings.agentConfigs?.partnerChat?.maxContextTokens ?? 128000,
-          thinkingDepth: settings.agentConfigs?.partnerChat?.thinkingDepth ?? 'off',
+          temperature: settings.agentConfigs?.storyAgent?.temperature ?? 0.7,
+          maxOutputTokens: settings.agentConfigs?.storyAgent?.maxOutputTokens ?? 4096,
+          maxContextTokens: settings.agentConfigs?.storyAgent?.maxContextTokens ?? 128000,
+          thinkingDepth: settings.agentConfigs?.storyAgent?.thinkingDepth ?? 'off',
           systemPrompt: effectiveSystemPrompt,
           workspacePath: null,
           messages: modelMessages,
           selectedReferenceFiles: [],
-          allowedTools: [] // Companion has no tools!
+          allowedTools: []
         }
       });
 
@@ -370,7 +443,7 @@ const Chat: React.FC = () => {
       setIsStreaming(false);
       setMessages((prev) => prev.map((msg) => (
         msg.id === agentMessageId
-          ? { ...msg, content: `请求模型失败：${String(err)}` }
+          ? { ...msg, content: `请求冒险发生故障：${String(err)}` }
           : msg
       )));
     }
@@ -381,7 +454,7 @@ const Chat: React.FC = () => {
       try {
         await invoke('stop_chat_stream', { runId: activeRunRef.current.runId });
       } catch (err) {
-        console.error('停止流失败:', err);
+        console.error('停止冒险失败:', err);
       }
     }
     setIsStreaming(false);
@@ -445,10 +518,10 @@ const Chat: React.FC = () => {
             baseUrl: settings.llmBaseUrl,
             apiKey: settings.llmApiKey,
             model: settings.llmModel,
-            temperature: settings.agentConfigs?.partnerChat?.temperature ?? 0.7,
-            maxOutputTokens: settings.agentConfigs?.partnerChat?.maxOutputTokens ?? 4096,
-            maxContextTokens: settings.agentConfigs?.partnerChat?.maxContextTokens ?? 128000,
-            thinkingDepth: settings.agentConfigs?.partnerChat?.thinkingDepth ?? 'off',
+            temperature: settings.agentConfigs?.storyAgent?.temperature ?? 0.7,
+            maxOutputTokens: settings.agentConfigs?.storyAgent?.maxOutputTokens ?? 4096,
+            maxContextTokens: settings.agentConfigs?.storyAgent?.maxContextTokens ?? 128000,
+            thinkingDepth: settings.agentConfigs?.storyAgent?.thinkingDepth ?? 'off',
             systemPrompt: effectiveSystemPrompt,
             workspacePath: null,
             messages: modelMessages,
@@ -465,7 +538,7 @@ const Chat: React.FC = () => {
         setIsStreaming(false);
         setMessages((prev) => prev.map((m) => (
           m.id === agentMessageId
-            ? { ...m, content: `请求模型失败：${String(err)}` }
+            ? { ...m, content: `请求冒险发生故障：${String(err)}` }
             : m
         )));
       }
@@ -506,10 +579,10 @@ const Chat: React.FC = () => {
           baseUrl: settings.llmBaseUrl,
           apiKey: settings.llmApiKey,
           model: settings.llmModel,
-          temperature: settings.agentConfigs?.partnerChat?.temperature ?? 0.7,
-          maxOutputTokens: settings.agentConfigs?.partnerChat?.maxOutputTokens ?? 4096,
-          maxContextTokens: settings.agentConfigs?.partnerChat?.maxContextTokens ?? 128000,
-          thinkingDepth: settings.agentConfigs?.partnerChat?.thinkingDepth ?? 'off',
+          temperature: settings.agentConfigs?.storyAgent?.temperature ?? 0.7,
+          maxOutputTokens: settings.agentConfigs?.storyAgent?.maxOutputTokens ?? 4096,
+          maxContextTokens: settings.agentConfigs?.storyAgent?.maxContextTokens ?? 128000,
+          thinkingDepth: settings.agentConfigs?.storyAgent?.thinkingDepth ?? 'off',
           systemPrompt: effectiveSystemPrompt,
           workspacePath: null,
           messages: modelMessages,
@@ -526,7 +599,7 @@ const Chat: React.FC = () => {
       setIsStreaming(false);
       setMessages((prev) => prev.map((msg) => (
         msg.id === agentMessageId
-          ? { ...msg, content: `请求模型失败：${String(err)}` }
+          ? { ...msg, content: `请求冒险发生故障：${String(err)}` }
           : msg
       )));
     }
@@ -538,10 +611,10 @@ const Chat: React.FC = () => {
 
   const refreshSessions = async () => {
     try {
-      const summaries = await invoke<AgentSessionSummary[]>('list_agent_sessions', { prefix: 'partner-session-' });
+      const summaries = await invoke<AgentSessionSummary[]>('list_agent_sessions', { prefix: 'story-session-' });
       setSessions(summaries);
     } catch (err) {
-      console.error('读取历史会话失败:', err);
+      console.error('读取故事会话失败:', err);
     }
   };
 
@@ -564,7 +637,7 @@ const Chat: React.FC = () => {
       });
       await refreshSessions();
     } catch (err) {
-      console.error('保存会话失败:', err);
+      console.error('保存故事会话失败:', err);
     }
   };
 
@@ -581,14 +654,14 @@ const Chat: React.FC = () => {
       setIsSessionArchived(session.isArchived ?? false);
       scrollToBottomOnce();
     } catch (err) {
-      console.error('打开历史会话失败:', err);
+      console.error('打开故事会话失败:', err);
     }
   };
 
   const handleDeleteSession = async (id: string) => {
     try {
       await invoke('delete_agent_session', { id });
-      message.success('已删除历史会话');
+      message.success('已删除该冒险记录');
       if (id === sessionIdRef.current) {
         createNewSession();
       }
@@ -600,16 +673,30 @@ const Chat: React.FC = () => {
   };
 
   const handleArchiveMemory = async () => {
-    if (!selectedCharacterCard || messages.length === 0 || isStreaming || isSessionArchived) return;
+    if (messages.length === 0 || isStreaming || isSessionArchived) return;
+
+    if (selectedCards.length === 0) {
+      message.warning('当前冒险尚未绑定任何角色卡，无法封存记忆！');
+      return;
+    }
+
+    setTempSelectedCardIds(selectedCards.map(c => c.id));
+    setHasStartedAnalysis(false);
+    setArchiveAnalyses({});
+    setIsArchiveModalOpen(true);
+  };
+
+  const startAnalyzingSelectedCards = async () => {
+    if (tempSelectedCardIds.length === 0) return;
 
     setIsAnalyzing(true);
-    setIsArchiveModalOpen(true);
-    setArchiveAnalysis(null);
+    setHasStartedAnalysis(true);
+    setSelectedTargetCardId(tempSelectedCardIds[0]);
 
     const chatHistoryText = messages
       .filter(m => m.role === 'user' || m.role === 'agent')
       .map(m => {
-        const sender = m.role === 'user' ? '我' : (selectedCharacterCard.name);
+        const sender = m.role === 'user' ? '我' : '故事旁白与NPC';
         const cleanContent = m.content.replace(/\[\[THINKING:[^\]]+\]\]/g, '').trim();
         return `${sender}: ${cleanContent}`;
       })
@@ -617,75 +704,106 @@ const Chat: React.FC = () => {
       .join('\n\n');
 
     try {
-      const resultStr = await invoke<string>('analyze_character_memory', {
-        request: {
-          modelInterface: settings.modelInterface,
-          baseUrl: settings.llmBaseUrl,
-          apiKey: settings.llmApiKey,
-          model: settings.llmModel,
-          temperature: 0.7,
-          maxOutputTokens: 4096,
-          thinkingDepth: 'off',
-          chatHistory: chatHistoryText,
-          currentUserRelationType: selectedCharacterCard.fields?.userRelationType || '',
-          currentUserInteractionModel: selectedCharacterCard.fields?.userInteractionModel || '',
-          currentUserRelationBottomLine: selectedCharacterCard.fields?.userRelationBottomLine || '',
-          currentEvents: selectedCharacterCard.fields?.keyEvents || '暂无共同经历的关键事件。'
-        }
+      const filteredCards = selectedCards.filter(cc => tempSelectedCardIds.includes(cc.id));
+      const promises = filteredCards.map(async (card) => {
+        const resultStr = await invoke<string>('analyze_character_memory', {
+          request: {
+            modelInterface: settings.modelInterface,
+            baseUrl: settings.llmBaseUrl,
+            apiKey: settings.llmApiKey,
+            model: settings.llmModel,
+            temperature: 0.7,
+            maxOutputTokens: 4096,
+            thinkingDepth: 'off',
+            chatHistory: chatHistoryText,
+            currentUserRelationType: card.fields?.userRelationType || '',
+            currentUserInteractionModel: card.fields?.userInteractionModel || '',
+            currentUserRelationBottomLine: card.fields?.userRelationBottomLine || '',
+            currentEvents: card.fields?.keyEvents || '暂无共同经历的关键事件。'
+          }
+        });
+        const analysis = JSON.parse(resultStr);
+        return { cardId: card.id, analysis };
       });
 
-      const analysis = JSON.parse(resultStr);
-      setArchiveAnalysis(analysis);
-      setEditedTitle(analysis.sessionTitle || sessionTitle || '未命名会话');
-      setEditedRelationType(analysis.userRelationType || '');
-      setEditedRelationModel(analysis.userInteractionModel || '');
-      setEditedRelationBottomLine(analysis.userRelationBottomLine || '');
-      setEditedEvents(analysis.keyEvents || '');
+      const results = await Promise.all(promises);
+      const analyses: Record<string, any> = {};
+      const relationTypes: Record<string, string> = {};
+      const relationModels: Record<string, string> = {};
+      const relationBottomLines: Record<string, string> = {};
+      const events: Record<string, string> = {};
+      let firstSessionTitle = '';
+
+      for (const res of results) {
+        analyses[res.cardId] = res.analysis;
+        relationTypes[res.cardId] = res.analysis.userRelationType || '';
+        relationModels[res.cardId] = res.analysis.userInteractionModel || '';
+        relationBottomLines[res.cardId] = res.analysis.userRelationBottomLine || '';
+        events[res.cardId] = res.analysis.keyEvents || '';
+        if (!firstSessionTitle) {
+          firstSessionTitle = res.analysis.sessionTitle || '';
+        }
+      }
+
+      setArchiveAnalyses(analyses);
+      setEditedRelationTypes(relationTypes);
+      setEditedRelationModels(relationModels);
+      setEditedRelationBottomLines(relationBottomLines);
+      setEditedEventsMap(events);
+      setEditedTitle(firstSessionTitle || sessionTitle || '未命名故事');
     } catch (err) {
-      console.error('分析记忆失败:', err);
-      message.error(`记忆分析失败：${String(err)}`);
+      console.error('故事记忆分析失败:', err);
+      message.error(`故事记忆分析失败：${String(err)}`);
       setIsArchiveModalOpen(false);
+      setHasStartedAnalysis(false);
     } finally {
       setIsAnalyzing(false);
     }
   };
 
+  const handleTargetCardChange = (cardId: string) => {
+    setSelectedTargetCardId(cardId);
+  };
+
   const handleConfirmArchive = async () => {
-    if (!selectedCharacterCard) return;
-
     try {
-      // 1. Update character card fields in usePartnerStore
-      updateItemFields(selectedCharacterCard.id, 'character_card', {
-        userRelationType: editedRelationType,
-        userInteractionModel: editedRelationModel,
-        userRelationBottomLine: editedRelationBottomLine,
-        keyEvents: editedEvents
-      });
+      // 1. Update all character card fields
+      const filteredCards = selectedCards.filter(c => tempSelectedCardIds.includes(c.id));
+      for (const card of filteredCards) {
+        const relationType = editedRelationTypes[card.id] || '';
+        const relationModel = editedRelationModels[card.id] || '';
+        const relationBottomLine = editedRelationBottomLines[card.id] || '';
+        const events = editedEventsMap[card.id] || '';
+        updateItemFields(card.id, 'character_card', {
+          userRelationType: relationType,
+          userInteractionModel: relationModel,
+          userRelationBottomLine: relationBottomLine,
+          keyEvents: events
+        });
+      }
 
-      // 2. Set current session archive status to true
+      // 2. Archive session state
       setIsSessionArchived(true);
-      
-      // 3. Set the new session title
-      const finalTitle = editedTitle.trim() || '未命名会话';
+      const finalTitle = editedTitle.trim() || '未命名故事';
       setSessionTitle(finalTitle);
       sessionTitleRef.current = finalTitle;
       isSessionArchivedRef.current = true;
 
-      // 4. Update session title on backend and save the session
+      // 3. Update backend session title and persist
       await invoke('update_agent_session_title', { id: sessionIdRef.current, title: finalTitle });
       await saveCurrentSession();
 
-      message.success('伴侣记忆封存成功！当前会话已锁定归档。');
+      message.success('冒险记忆成功封存到选中的角色卡！本局会话已锁定归档。');
       setIsArchiveModalOpen(false);
     } catch (err) {
-      console.error('封存记忆失败:', err);
-      message.error(`封存记忆失败：${String(err)}`);
+      console.error('封存故事记忆失败:', err);
+      message.error(`封存故事记忆失败：${String(err)}`);
     }
   };
 
-  // Context ring stats
+  // Context Stats
   const contextStats = estimateContextUsage(effectiveSystemPrompt, messages, input);
-  const maxContext = settings.agentConfigs?.partnerChat?.maxContextTokens ?? 128000;
+  const maxContext = settings.agentConfigs?.storyAgent?.maxContextTokens ?? 128000;
   const contextPercent = maxContext > 0
     ? Math.min(100, Math.round((contextStats.total / maxContext) * 100))
     : 0;
@@ -693,44 +811,20 @@ const Chat: React.FC = () => {
   const contextTooltip = (
     <div className="agent-context-popover">
       <div className="agent-context-popover__header">
-        <strong>上下文详情</strong>
-      </div>
-      <div className="agent-context-popover__row">
-        <span className="agent-context-popover__label">模型：</span>
-        <span className="agent-context-popover__value">{settings.llmModel || '未设置'}</span>
+        <strong>冒险上下文详情</strong>
       </div>
       <div className="agent-context-popover__row">
         <span className="agent-context-popover__label">世界书：</span>
         <span className="agent-context-popover__value">{selectedWorldBook?.name || '未绑定'}</span>
       </div>
       <div className="agent-context-popover__row">
-        <span className="agent-context-popover__label">角色卡：</span>
-        <span className="agent-context-popover__value">{selectedCharacterCard?.name || '未绑定'}</span>
+        <span className="agent-context-popover__label">活跃角色：</span>
+        <span className="agent-context-popover__value">{selectedCards.map(c => c.name).join(', ') || '未绑定'}</span>
       </div>
       <div className="agent-context-popover__divider" />
       <div className="agent-context-popover__row">
-        <span className="agent-context-popover__label">消息数：</span>
-        <span className="agent-context-popover__value">{messages.length} 条</span>
-      </div>
-      <div className="agent-context-popover__row">
-        <span className="agent-context-popover__label">总 token：</span>
+        <span className="agent-context-popover__label">总估 Token：</span>
         <span className="agent-context-popover__value agent-context-popover__value--highlight">{contextStats.total} / {maxContext}</span>
-      </div>
-      <div className="agent-context-popover__row">
-        <span className="agent-context-popover__label">用户消息：</span>
-        <span className="agent-context-popover__value">{contextStats.user}</span>
-      </div>
-      <div className="agent-context-popover__row">
-        <span className="agent-context-popover__label">AI 回复：</span>
-        <span className="agent-context-popover__value">{contextStats.assistant}</span>
-      </div>
-      <div className="agent-context-popover__row">
-        <span className="agent-context-popover__label">系统设定：</span>
-        <span className="agent-context-popover__value">{contextStats.system}</span>
-      </div>
-      <div className="agent-context-popover__row">
-        <span className="agent-context-popover__label">工具消耗：</span>
-        <span className="agent-context-popover__value">0</span>
       </div>
     </div>
   );
@@ -740,86 +834,150 @@ const Chat: React.FC = () => {
   return (
     <div className="agent-chat" style={{ height: '100%', display: 'flex', flexDirection: 'column', background: '#faf9f5' }}>
       
-      {/* Settings Modal */}
-      <PartnerChatSettingsModal
-        open={isSettingsOpen}
-        onCancel={() => setIsSettingsOpen(false)}
-      />
-
       {/* Archive Memory Modal */}
       <Modal
         title={
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#33312e', fontSize: '18px', fontWeight: 600 }}>
             <FileProtectOutlined style={{ color: '#d97757' }} />
-            <span>记忆封存与设定同步</span>
+            <span>封存冒险记忆与设定同步</span>
           </div>
         }
         open={isArchiveModalOpen}
         onCancel={() => !isAnalyzing && setIsArchiveModalOpen(false)}
-        onOk={handleConfirmArchive}
-        okText="确认同步并封存"
-        cancelText="取消"
-        confirmLoading={isAnalyzing}
         width={720}
-        okButtonProps={{ disabled: isAnalyzing }}
-        styles={{
-          body: { padding: '16px 24px' }
-        }}
+        styles={{ body: { padding: '16px 24px' } }}
+        footer={
+          !hasStartedAnalysis ? (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <Button onClick={() => setIsArchiveModalOpen(false)}>取消</Button>
+              <Button
+                type="primary"
+                disabled={tempSelectedCardIds.length === 0}
+                onClick={startAnalyzingSelectedCards}
+                style={{
+                  backgroundColor: tempSelectedCardIds.length > 0 ? '#d97757' : undefined,
+                  borderColor: tempSelectedCardIds.length > 0 ? '#d97757' : undefined,
+                  borderRadius: '6px',
+                  color: tempSelectedCardIds.length > 0 ? '#ffffff' : undefined
+                }}
+              >
+                开始分析封存
+              </Button>
+            </div>
+          ) : isAnalyzing ? null : (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <Button onClick={() => setIsArchiveModalOpen(false)}>取消</Button>
+              <Button
+                type="primary"
+                onClick={handleConfirmArchive}
+                style={{
+                  backgroundColor: '#d97757',
+                  borderColor: '#d97757',
+                  borderRadius: '6px',
+                  color: '#ffffff'
+                }}
+              >
+                确认同步并归档
+              </Button>
+            </div>
+          )
+        }
       >
-        {isAnalyzing ? (
+        {!hasStartedAnalysis ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '12px 0' }}>
+            <div style={{ fontSize: '14px', color: '#5c5751', fontWeight: 500 }}>
+              请勾选本次封存记忆需要更新的角色卡：
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', padding: '8px 0' }}>
+              {selectedCards.map((card) => {
+                const isChecked = tempSelectedCardIds.includes(card.id);
+                return (
+                  <Checkbox
+                    key={card.id}
+                    checked={isChecked}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setTempSelectedCardIds((prev) =>
+                        checked ? [...prev, card.id] : prev.filter((id) => id !== card.id)
+                      );
+                    }}
+                    style={{
+                      margin: 0,
+                      padding: '8px 16px',
+                      border: isChecked ? '1px solid #d97757' : '1px solid #eae6df',
+                      borderRadius: '8px',
+                      backgroundColor: isChecked ? '#fff7f2' : '#faf9f5',
+                      color: isChecked ? '#d97757' : '#5c5751',
+                      transition: 'all 0.2s ease',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <span style={{ fontSize: '13px', fontWeight: 500 }}>{card.name}</span>
+                  </Checkbox>
+                );
+              })}
+            </div>
+          </div>
+        ) : isAnalyzing ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 0', gap: '16px' }}>
             <Spin size="large" />
             <div style={{ color: '#8c8882', fontSize: '14px' }}>
-              正在召回对话历史，深度剖析并提炼伴侣长期记忆...
+              正在深度提炼并收拢本次冒险中的关系与里程碑经历...
             </div>
           </div>
-        ) : archiveAnalysis ? (
+        ) : archiveAnalyses[selectedTargetCardId] ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            <div style={{ padding: '12px 16px', background: '#faf6f0', borderRadius: '8px', border: '1px solid #f2e8dc', color: '#8c8882', fontSize: '13px' }}>
-              <strong>提示：</strong>大模型已深入剖析本场对话，为您生成了伴侣人设立场的变化修改点。请在同步前仔细确认，您也可以直接在下方编辑框中进行微调润色。
+            
+            {/* Target Character Card Sync Selector */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: '#faf6f0', padding: '12px 16px', borderRadius: '8px', border: '1px solid #f2e8dc' }}>
+              <strong style={{ color: '#33312e', fontSize: '14px' }}>选择要同步的角色卡：</strong>
+              <Select
+                value={selectedTargetCardId}
+                onChange={handleTargetCardChange}
+                style={{ width: 220 }}
+                options={selectedCards.filter(c => tempSelectedCardIds.includes(c.id)).map(c => ({ value: c.id, label: c.name }))}
+              />
             </div>
 
-            {/* Changes Analysis */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <div style={{ border: '1px solid rgba(0,0,0,0.04)', padding: '12px', borderRadius: '6px', background: '#fafafa' }}>
-                <div style={{ color: '#d97757', fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>关系变化分析</div>
-                <div style={{ fontSize: '13px', color: '#33312e', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{archiveAnalysis.relationChanges}</div>
+                <div style={{ color: '#d97757', fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>关系变化提炼</div>
+                <div style={{ fontSize: '13px', color: '#33312e', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{archiveAnalyses[selectedTargetCardId]?.relationChanges}</div>
               </div>
               <div style={{ border: '1px solid rgba(0,0,0,0.04)', padding: '12px', borderRadius: '6px', background: '#fafafa' }}>
-                <div style={{ color: '#d97757', fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>共同事件分析</div>
-                <div style={{ fontSize: '13px', color: '#33312e', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{archiveAnalysis.eventChanges}</div>
+                <div style={{ color: '#d97757', fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>里程碑事件提炼</div>
+                <div style={{ fontSize: '13px', color: '#33312e', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{archiveAnalyses[selectedTargetCardId]?.eventChanges}</div>
               </div>
             </div>
 
             <div style={{ height: '1px', background: 'rgba(0,0,0,0.03)' }} />
 
-            {/* Editable fields */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: '#33312e', marginBottom: '6px' }}>本场聊天会话标题</div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: '#33312e', marginBottom: '6px' }}>本局冒险标题</div>
                 <Input 
                   value={editedTitle} 
                   onChange={(e) => setEditedTitle(e.target.value)} 
-                  placeholder="请输入建议标题"
+                  placeholder="冒险标题"
                   style={{ borderRadius: '6px', borderColor: '#eae6df' }}
                 />
               </div>
 
               <div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: '#33312e', marginBottom: '6px' }}>更新后的与用户关系类型</div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: '#33312e', marginBottom: '6px' }}>更新后的与用户关系类型（{selectedCards.find(c => c.id === selectedTargetCardId)?.name}）</div>
                 <Input 
-                  value={editedRelationType} 
-                  onChange={(e) => setEditedRelationType(e.target.value)} 
+                  value={editedRelationTypes[selectedTargetCardId] || ''} 
+                  onChange={(e) => setEditedRelationTypes(prev => ({ ...prev, [selectedTargetCardId]: e.target.value }))} 
                   placeholder="与用户关系类型..."
                   style={{ borderRadius: '6px', borderColor: '#eae6df' }}
                 />
               </div>
 
               <div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: '#33312e', marginBottom: '6px' }}>更新后的与用户相处模式</div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: '#33312e', marginBottom: '6px' }}>更新后的与用户相处模式（{selectedCards.find(c => c.id === selectedTargetCardId)?.name}）</div>
                 <Input.TextArea 
-                  value={editedRelationModel} 
-                  onChange={(e) => setEditedRelationModel(e.target.value)} 
+                  value={editedRelationModels[selectedTargetCardId] || ''} 
+                  onChange={(e) => setEditedRelationModels(prev => ({ ...prev, [selectedTargetCardId]: e.target.value }))} 
                   autoSize={{ minRows: 2, maxRows: 4 }}
                   placeholder="与用户相处模式..."
                   style={{ borderRadius: '6px', borderColor: '#eae6df' }}
@@ -827,10 +985,10 @@ const Chat: React.FC = () => {
               </div>
 
               <div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: '#33312e', marginBottom: '6px' }}>更新后的与用户关系底线</div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: '#33312e', marginBottom: '6px' }}>更新后的与用户关系底线（{selectedCards.find(c => c.id === selectedTargetCardId)?.name}）</div>
                 <Input.TextArea 
-                  value={editedRelationBottomLine} 
-                  onChange={(e) => setEditedRelationBottomLine(e.target.value)} 
+                  value={editedRelationBottomLines[selectedTargetCardId] || ''} 
+                  onChange={(e) => setEditedRelationBottomLines(prev => ({ ...prev, [selectedTargetCardId]: e.target.value }))} 
                   autoSize={{ minRows: 2, maxRows: 4 }}
                   placeholder="与用户关系底线..."
                   style={{ borderRadius: '6px', borderColor: '#eae6df' }}
@@ -838,12 +996,11 @@ const Chat: React.FC = () => {
               </div>
 
               <div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: '#33312e', marginBottom: '6px' }}>更新后的关键事件记录</div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: '#33312e', marginBottom: '6px' }}>更新后的关键经历记录（{selectedCards.find(c => c.id === selectedTargetCardId)?.name}）</div>
                 <Input.TextArea 
-                  value={editedEvents} 
-                  onChange={(e) => setEditedEvents(e.target.value)} 
+                  value={editedEventsMap[selectedTargetCardId] || ''} 
+                  onChange={(e) => setEditedEventsMap(prev => ({ ...prev, [selectedTargetCardId]: e.target.value }))} 
                   autoSize={{ minRows: 4, maxRows: 8 }}
-                  placeholder="更新后的关键事件记录..."
                   style={{ borderRadius: '6px', borderColor: '#eae6df' }}
                 />
               </div>
@@ -855,20 +1012,18 @@ const Chat: React.FC = () => {
       {/* Header */}
       <div className="agent-chat__header" style={{ borderBottom: '1px solid #eae6df', padding: '16px 24px' }}>
         <div className="agent-chat__title">
-          <MessageOutlined style={{ color: '#d97757', fontSize: 18 }} />
-          <h3 style={{ margin: 0, fontWeight: 600, color: '#33312e' }}>
-            伴侣聊天室
-            {selectedCharacterCard && (
-              <span style={{ fontSize: 13, color: '#8c8882', fontWeight: 400, marginLeft: 8 }}>
-                (已绑定: {selectedCharacterCard.name})
-              </span>
-            )}
+          <CompassOutlined style={{ color: '#d97757', fontSize: 18 }} />
+          <h3 style={{ margin: 0, fontWeight: 600, color: '#33312e', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {sessionTitle}
+            <span style={{ fontSize: 12, color: '#8c8882', fontWeight: 400 }}>
+              ({selectedWorldBook?.name || '无世界书'} · {selectedCards.length}个活跃角色)
+            </span>
           </h3>
         </div>
         
         <div className="agent-chat__header-actions">
-          {selectedCharacterCard && (
-            <Tooltip title={isSessionArchived ? "当前会话的记忆已封存到角色卡" : "封存本场对话记忆到角色卡并归档"}>
+          {selectedCards.length > 0 && (
+            <Tooltip title={isSessionArchived ? "当前冒险记录已归档封存" : "封存本局冒险记忆并锁定会话"}>
               <Button
                 type="text"
                 disabled={isStreaming || isSessionArchived || messages.length === 0}
@@ -888,7 +1043,7 @@ const Chat: React.FC = () => {
             </Tooltip>
           )}
 
-          <Tooltip title="清除当前上下文">
+          <Tooltip title="重开新冒险">
             <Button type="text" icon={<ReloadOutlined />} onClick={createNewSession} />
           </Tooltip>
           
@@ -918,7 +1073,7 @@ const Chat: React.FC = () => {
                       </div>
                     ),
                   }))
-                : [{ key: 'empty', disabled: true, label: '暂无历史聊天' }],
+                : [{ key: 'empty', disabled: true, label: '暂无历史冒险' }],
               onClick: ({ key }) => {
                 if (key !== 'empty') void openSession(String(key));
               },
@@ -936,16 +1091,18 @@ const Chat: React.FC = () => {
       {/* Main chat layout */}
       {hasMessages ? (
         <div ref={chatHistoryRef} className="agent-chat__history" style={{ flex: 1, overflowY: 'auto', padding: '24px' }}>
+          
+          {/* Foldable System Prompt */}
           <div className="agent-message-row agent-message-row--system">
             <div className="agent-message-bubble agent-message-bubble--system">
               <FoldBlock
                 icon={<InfoCircleOutlined />}
                 variant="thinking"
-                title="系统提示词（已融合设定）"
+                title="冒险设定系统提示词（已融汇世界书与多角色卡）"
                 preview={effectiveSystemPrompt.slice(0, 80) + (effectiveSystemPrompt.length > 80 ? '...' : '')}
                 detail={effectiveSystemPrompt}
-                expanded={Boolean(expandedBlocks['system-prompt'])}
-                onToggle={() => toggleBlock('system-prompt')}
+                expanded={Boolean(expandedBlocks['story-system-prompt'])}
+                onToggle={() => toggleBlock('story-system-prompt')}
               />
             </div>
           </div>
@@ -1012,7 +1169,7 @@ const Chat: React.FC = () => {
                           <FoldBlock
                             icon={<BulbOutlined />}
                             variant="thinking"
-                            title="思考"
+                            title="思考推演"
                             preview={msg.thinking}
                             expanded={Boolean(expandedBlocks[`${msg.id}-thinking`])}
                             onToggle={() => toggleBlock(`${msg.id}-thinking`)}
@@ -1033,7 +1190,7 @@ const Chat: React.FC = () => {
                                     icon={<BulbOutlined />}
                                     variant="thinking"
                                     key={`thinking-${thinkingId}`}
-                                    title="思考"
+                                    title="思考过程"
                                     preview={block.content}
                                     expanded={Boolean(expandedBlocks[`${msg.id}-thinking-${thinkingId}`])}
                                     onToggle={() => toggleBlock(`${msg.id}-thinking-${thinkingId}`)}
@@ -1104,126 +1261,255 @@ const Chat: React.FC = () => {
           })}
         </div>
       ) : (
-        /* Empty/Home State - Center Input Box */
+        /* Empty/Wizard Setup State */
         <div style={{
           flex: 1,
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'center',
           alignItems: 'center',
-          padding: '0 24px',
-          maxWidth: '800px',
+          padding: '40px 24px',
+          maxWidth: '720px',
           margin: '0 auto',
           width: '100%',
-          transition: 'all 0.5s ease'
+          overflowY: 'auto'
         }}>
           <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-            <MessageOutlined style={{ fontSize: '56px', color: '#d97757', marginBottom: '16px', opacity: 0.9 }} />
+            <CompassOutlined style={{ fontSize: '56px', color: '#d97757', marginBottom: '16px', opacity: 0.9 }} />
             <h2 style={{ fontSize: '26px', fontWeight: 600, color: '#33312e', margin: '0 0 8px 0', letterSpacing: '-0.5px' }}>
-              伴侣聊天室
+              故事冒险页
             </h2>
             <p style={{ color: '#8c8882', fontSize: '15px', margin: 0 }}>
-              基于世界书和角色卡设定与您的理想角色开启沉浸式对话
+              选择世界设定与冒险角色，即刻启程展开独一无二的奇幻历险
             </p>
           </div>
 
-          {/* Quick Bind Cards */}
-          <div style={{ display: 'flex', gap: '16px', marginBottom: '32px', width: '100%', maxWidth: '640px', justifyContent: 'center' }}>
-            <Tag icon={<BookOutlined />} color={selectedWorldBook ? "orange" : "default"} style={{ padding: '4px 12px', fontSize: '13px', borderRadius: '4px', border: '1px solid #eae6df' }}>
-              世界书: {selectedWorldBook ? selectedWorldBook.name : '未绑定'}
-            </Tag>
-            <Tag icon={<UserOutlined />} color={selectedCharacterCard ? "orange" : "default"} style={{ padding: '4px 12px', fontSize: '13px', borderRadius: '4px', border: '1px solid #eae6df' }}>
-              角色卡: {selectedCharacterCard ? selectedCharacterCard.name : '未绑定'}
-            </Tag>
+          <div style={{
+            width: '100%',
+            background: '#ffffff',
+            border: '1px solid #eae6df',
+            borderRadius: '12px',
+            padding: '32px',
+            boxShadow: '0 4px 24px rgba(217, 119, 87, 0.02)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '24px'
+          }}>
+            {/* World Book Dropdown Selector */}
+            <div>
+              <div style={{ fontSize: '14px', fontWeight: 600, color: '#33312e', marginBottom: '8px' }}>
+                选择冒险世界设定集 (世界书)
+              </div>
+              <Select
+                placeholder="选择一个世界设定..."
+                value={selectedWorldBookId}
+                onChange={setSelectedWorldBookId}
+                style={{ width: '100%' }}
+                options={worldBooks.map((wb) => ({ value: wb.id, label: wb.name }))}
+              />
+            </div>
+
+            {/* Character Cards Multi Selector */}
+            <div>
+              <div style={{ fontSize: '14px', fontWeight: 600, color: '#33312e', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
+                <span>选择共同历险的角色卡 (可多选)</span>
+                <span style={{ fontSize: '12px', fontWeight: 400, color: '#d97757', cursor: 'pointer' }} onClick={() => selectItem(null, null)}>前往背景页创建人设 &gt;</span>
+              </div>
+              
+              {characterCards.length > 0 ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                  {characterCards.map((cc) => {
+                    const isChecked = selectedCharacterCardIds.includes(cc.id);
+                    return (
+                      <Tag.CheckableTag
+                        key={cc.id}
+                        checked={isChecked}
+                        onChange={(checked) => {
+                          const nextIds = checked
+                            ? [...selectedCharacterCardIds, cc.id]
+                            : selectedCharacterCardIds.filter(id => id !== cc.id);
+                          setSelectedCharacterCardIds(nextIds);
+                        }}
+                        style={{
+                          padding: '6px 14px',
+                          fontSize: '13px',
+                          border: isChecked ? '1px solid #d97757' : '1px solid #eae6df',
+                          borderRadius: '6px',
+                          backgroundColor: isChecked ? '#fff7f2' : '#faf9f5',
+                          color: isChecked ? '#d97757' : '#5c5751',
+                          margin: 0,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <UserOutlined style={{ marginRight: 6 }} />
+                        {cc.name}
+                      </Tag.CheckableTag>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ color: '#8c8882', fontSize: '13px', textAlign: 'center', padding: '12px', border: '1px dashed #eae6df', borderRadius: '6px', background: '#faf9f5' }}>
+                  目前还没有角色卡，去背景页新建一个吧！
+                </div>
+              )}
+            </div>
+
+            {/* Initial Plot TextArea */}
+            <div>
+              <div style={{ fontSize: '14px', fontWeight: 600, color: '#33312e', marginBottom: '8px' }}>
+                设定初始剧情
+              </div>
+              <Input.TextArea
+                value={initialPlot}
+                onChange={(e) => setInitialPlot(e.target.value)}
+                placeholder="请粗略描述故事的开局走向。例如：“我们在一个漆黑的山谷里醒来，天空中划过雷电，远处传来了野兽的咆哮声。我手里只有一把生锈的铁剑，大家都聚在我身边...”"
+                autoSize={{ minRows: 4, maxRows: 8 }}
+                style={{
+                  borderRadius: '8px',
+                  borderColor: '#eae6df',
+                  backgroundColor: '#faf9f5',
+                  fontSize: '14px',
+                  lineHeight: 1.6
+                }}
+              />
+            </div>
+
+            {/* Start Button */}
+            <Button
+              type="primary"
+              size="large"
+              icon={<PlayCircleOutlined />}
+              onClick={startAdventure}
+              disabled={!selectedWorldBookId || !initialPlot.trim()}
+              style={{
+                backgroundColor: (selectedWorldBookId && initialPlot.trim()) ? '#d97757' : undefined,
+                borderColor: (selectedWorldBookId && initialPlot.trim()) ? '#d97757' : undefined,
+                borderRadius: '8px',
+                fontWeight: 600,
+                marginTop: '12px'
+              }}
+            >
+              开启冒险旅程
+            </Button>
           </div>
         </div>
       )}
 
       {/* Composer Input Area */}
-      <div className="agent-composer" style={{
-        padding: hasMessages ? '16px 24px 24px 24px' : '0 24px 100px 24px',
-        width: '100%',
-        maxWidth: hasMessages ? '100%' : '688px',
-        margin: '0 auto',
-        boxSizing: 'border-box',
-        transition: 'all 0.4s cubic-bezier(0.25, 0.8, 0.25, 1)'
-      }}>
-        <div id="agent-composer-box" className="agent-composer__box" style={{
-          boxShadow: hasMessages ? '0 2px 12px rgba(0, 0, 0, 0.04)' : '0 10px 30px rgba(217, 119, 87, 0.06)',
-          border: '1px solid #eae6df',
-          borderRadius: '12px',
-          background: '#ffffff',
-          position: 'relative'
+      {hasMessages && (
+        <div className="agent-composer" style={{
+          padding: '16px 24px 24px 24px',
+          width: '100%',
+          boxSizing: 'border-box'
         }}>
-          <Input.TextArea
-            className="agent-composer__textarea"
-            autoSize={{ minRows: hasMessages ? 1 : 2, maxRows: 8 }}
-            disabled={isSessionArchived}
-            onChange={(e) => setInput(e.target.value)}
-            style={{ zIndex: 2, position: 'relative', background: 'transparent', boxShadow: 'none', border: 'none', padding: '16px 16px 40px 16px', fontSize: '15px' }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-                event.preventDefault();
-                void handleSend();
-              }
-            }}
-            placeholder={
-              isSessionArchived
-                ? "当前会话的记忆已封存，无法继续发送消息"
-                : selectedCharacterCard 
-                  ? `与 ${selectedCharacterCard.name} 对话，按 Cmd/Ctrl + Enter 发送...` 
-                  : "请先点击左下角设置选择角色卡，然后开启对话..."
-            }
-            value={input}
-          />
-          
-          <div className="agent-composer__actions" style={{ position: 'absolute', bottom: '12px', left: '16px', right: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 3 }}>
-            <Button
-              aria-label="伴侣设置"
-              icon={<SettingOutlined />}
-              onClick={() => setIsSettingsOpen(true)}
-              shape="circle"
-              type={selectedCharacterCard ? 'primary' : 'default'}
-              style={{
-                backgroundColor: selectedCharacterCard ? '#d97757' : undefined,
-                borderColor: selectedCharacterCard ? '#d97757' : '#eae6df',
-                color: selectedCharacterCard ? '#ffffff' : '#5c5751'
+          {/* Formatted Text input helper overlay inside composer box */}
+          <div id="agent-composer-box" className="agent-composer__box" style={{
+            boxShadow: '0 2px 12px rgba(0, 0, 0, 0.04)',
+            border: '1px solid #eae6df',
+            borderRadius: '12px',
+            background: '#ffffff',
+            position: 'relative',
+            paddingTop: '40px' // Leave space for Segment Tabs
+          }}>
+            
+            {/* Input Action Segment Controller */}
+            <div style={{
+              position: 'absolute',
+              top: '8px',
+              left: '12px',
+              zIndex: 10,
+              display: 'flex',
+              gap: '6px'
+            }}>
+              <Radio.Group 
+                value={inputMode} 
+                onChange={(e) => setInputMode(e.target.value)}
+                size="small"
+                buttonStyle="solid"
+              >
+                <Radio.Button value="speech" style={{ borderRadius: '4px 0 0 4px' }}>
+                  <CommentOutlined style={{ marginRight: 4 }} />
+                  角色说话
+                </Radio.Button>
+                <Radio.Button value="behavior">
+                  <ExperimentOutlined style={{ marginRight: 4 }} />
+                  角色行为
+                </Radio.Button>
+                <Radio.Button value="plot" style={{ borderRadius: '0 4px 4px 0' }}>
+                  <BranchesOutlined style={{ marginRight: 4 }} />
+                  剧情客观推进
+                </Radio.Button>
+              </Radio.Group>
+            </div>
+
+            <Input.TextArea
+              className="agent-composer__textarea"
+              autoSize={{ minRows: 1, maxRows: 8 }}
+              disabled={isSessionArchived}
+              onChange={(e) => setInput(e.target.value)}
+              style={{ zIndex: 2, position: 'relative', background: 'transparent', boxShadow: 'none', border: 'none', padding: '12px 16px 40px 16px', fontSize: '15px' }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault();
+                  void handleSend();
+                }
               }}
-              title="伴侣设置"
+              placeholder={
+                isSessionArchived
+                  ? "本局冒险记忆已被封存，无法继续发送指令"
+                  : inputMode === 'speech'
+                    ? "以你角色的口吻输入对话内容，按 Cmd/Ctrl + Enter 提交..."
+                    : inputMode === 'behavior'
+                      ? "描述你角色采取的具体动作（例如：撬门、施法、隐蔽等）..."
+                      : "以旁白口吻描述剧情推进（例如：天空突然放晴、怪物发动袭击等）..."
+              }
+              value={input}
             />
             
-            <div className="agent-send-cluster" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <Tooltip color="#fff" placement="topRight" title={contextTooltip} overlayInnerStyle={{ width: 'max-content', maxWidth: 320, padding: '8px 12px', border: '1px solid #eae6df' }}>
-                <button
-                  aria-label="查看上下文详情"
-                  className="agent-context-ring"
-                  style={{ '--context-fill': `${contextPercent}%` } as React.CSSProperties}
-                  type="button"
-                >
-                  <span>{contextPercent}%</span>
-                </button>
-              </Tooltip>
+            <div className="agent-composer__actions" style={{ position: 'absolute', bottom: '12px', left: '16px', right: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 3 }}>
               
-              <Tooltip title={isStreaming ? '停止' : isSessionArchived ? '当前会话已封存' : '发送'}>
-                <Button
-                  className="de-ai-agent-run-button"
-                  disabled={isSessionArchived || (!isStreaming && !input.trim())}
-                  icon={isStreaming ? <StopOutlined /> : <PlayCircleOutlined />}
-                  onClick={isStreaming ? handleStop : handleSend}
-                  shape="circle"
-                  type={isStreaming ? "default" : "primary"}
-                  danger={isStreaming}
-                  style={isStreaming ? undefined : {
-                    backgroundColor: '#d97757',
-                    borderColor: '#d97757',
-                    color: '#ffffff'
-                  }}
-                />
-              </Tooltip>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '12px', color: '#8c8882' }}>
+                  当前模式：
+                  <Tag color="orange" style={{ margin: 0 }}>
+                    {inputMode === 'speech' ? '说话 (我：“内容”)' : inputMode === 'behavior' ? '动作 (（我 内容）)' : '第三方剧情推进'}
+                  </Tag>
+                </span>
+              </div>
+              
+              <div className="agent-send-cluster" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <Tooltip color="#fff" placement="topRight" title={contextTooltip} overlayInnerStyle={{ width: 'max-content', maxWidth: 320, padding: '8px 12px', border: '1px solid #eae6df' }}>
+                  <button
+                    aria-label="查看上下文"
+                    className="agent-context-ring"
+                    style={{ '--context-fill': `${contextPercent}%` } as React.CSSProperties}
+                    type="button"
+                  >
+                    <span>{contextPercent}%</span>
+                  </button>
+                </Tooltip>
+                
+                <Tooltip title={isStreaming ? '停止' : isSessionArchived ? '当前故事已归档' : '提交行动'}>
+                  <Button
+                    className="de-ai-agent-run-button"
+                    disabled={isSessionArchived || (!isStreaming && !input.trim())}
+                    icon={isStreaming ? <StopOutlined /> : <PlayCircleOutlined />}
+                    onClick={isStreaming ? handleStop : handleSend}
+                    shape="circle"
+                    type={isStreaming ? "default" : "primary"}
+                    danger={isStreaming}
+                    style={isStreaming ? undefined : {
+                      backgroundColor: '#d97757',
+                      borderColor: '#d97757',
+                      color: '#ffffff'
+                    }}
+                  />
+                </Tooltip>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
@@ -1256,4 +1542,4 @@ function FoldBlock({
   );
 }
 
-export default Chat;
+export default Story;

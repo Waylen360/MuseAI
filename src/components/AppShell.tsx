@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Layout, Menu, ConfigProvider, Modal, Button } from 'antd';
-import { BookOutlined, SettingOutlined, ClearOutlined, ExclamationCircleOutlined, ReadOutlined, ProfileOutlined, GlobalOutlined, MessageOutlined } from '@ant-design/icons';
+import { BookOutlined, SettingOutlined, ClearOutlined, ExclamationCircleOutlined, ReadOutlined, ProfileOutlined, GlobalOutlined, MessageOutlined, CompassOutlined } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -96,6 +96,11 @@ const AppShell: React.FC = () => {
                 key: '/chat',
                 icon: <MessageOutlined />,
                 label: '聊天',
+              },
+              {
+                key: '/story',
+                icon: <CompassOutlined />,
+                label: '故事',
               },
               {
                 type: 'divider',

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Button, Input, Tooltip, Empty, Card, Tabs, Tag, Row, Col, Space, Radio } from 'antd';
+import { Button, Input, Tooltip, Empty, Card, Tabs, Tag, Row, Col, Space, Radio, Modal, Spin, message, Tree } from 'antd';
 import { 
   GlobalOutlined, 
   UserOutlined, 
@@ -8,9 +8,17 @@ import {
   EditOutlined,
   CompassOutlined,
   EyeOutlined,
-  EditFilled
+  EditFilled,
+  RobotOutlined,
+  ThunderboltOutlined,
+  BookOutlined,
+  FileProtectOutlined,
+  InfoCircleOutlined,
+  LoadingOutlined
 } from '@ant-design/icons';
 import { usePartnerStore, PartnerItem, PartnerItemFields } from '../stores/usePartnerStore';
+import { useSettingsStore } from '../stores/useSettingsStore';
+import { invoke } from '@tauri-apps/api/core';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -26,9 +34,192 @@ const Background: React.FC = () => {
     addCharacterCard,
     selectItem,
     deleteItem,
-    updateItemName,
+      updateItemName,
     updateItemFields
   } = usePartnerStore();
+
+  const settings = useSettingsStore();
+  const { importGeneratedItems } = usePartnerStore();
+
+  // AI settings generation states
+  const [isAiModalOpen, setIsAiModalOpen] = useState(false);
+  const [selectedFilePaths, setSelectedFilePaths] = useState<string[]>([]);
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  // Folder Tree States for AI Settings Modal
+  interface FileTreeNode {
+    title: string;
+    key: string;
+    isLeaf: boolean;
+    children?: FileTreeNode[];
+  }
+  const [articlesTree, setArticlesTree] = useState<FileTreeNode[]>([]);
+  const [outlineTree, setOutlineTree] = useState<FileTreeNode[]>([]);
+  const [referencesTree, setReferencesTree] = useState<FileTreeNode[]>([]);
+  const [flatFiles, setFlatFiles] = useState<string[]>([]);
+
+  // AI memory optimization states
+  const [isMemModalOpen, setIsMemModalOpen] = useState(false);
+  const [optimizedEvents, setOptimizedEvents] = useState('');
+  const [isOptimizing, setIsOptimizing] = useState(false);
+
+  const loadWorkspaceFiles = async () => {
+    try {
+      const artRoot: string = await invoke('get_workspace_dir', { dirType: 'articles' });
+      const outRoot: string = await invoke('get_workspace_dir', { dirType: 'outline' });
+      const refRoot: string = await invoke('get_workspace_dir', { dirType: 'references' });
+
+      let filesList: string[] = [];
+
+      const fetchDirTree = async (path: string): Promise<FileTreeNode[]> => {
+        const list: any[] = await invoke('list_dir', { path });
+        const nodes: FileTreeNode[] = [];
+
+        for (const item of list) {
+          if (
+            item.name === '.versions' || 
+            item.name === '.work-summary-results' || 
+            item.name === '.work-summary-results.json'
+          ) {
+            continue;
+          }
+          if (item.is_dir) {
+            const children = await fetchDirTree(item.path);
+            nodes.push({
+              title: item.name,
+              key: item.path,
+              isLeaf: false,
+              children
+            });
+          } else {
+            const lower = item.name.toLowerCase();
+            if (lower.endsWith('.md') || lower.endsWith('.txt')) {
+              nodes.push({
+                title: item.name,
+                key: item.path,
+                isLeaf: true
+              });
+              filesList.push(item.path);
+            }
+          }
+        }
+
+        nodes.sort((a, b) => {
+          if (a.isLeaf !== b.isLeaf) return a.isLeaf ? 1 : -1;
+          return a.title.localeCompare(b.title);
+        });
+
+        return nodes;
+      };
+
+      const artNodes = await fetchDirTree(artRoot);
+      const outNodes = await fetchDirTree(outRoot);
+      const refNodes = await fetchDirTree(refRoot);
+
+      setFlatFiles(filesList);
+      setArticlesTree(artNodes);
+      setOutlineTree(outNodes);
+      setReferencesTree(refNodes);
+    } catch (e) {
+      console.error('加载工作区文件目录树失败:', e);
+      message.error('加载工作区文件目录树失败');
+    }
+  };
+
+  useEffect(() => {
+    if (isAiModalOpen) {
+      loadWorkspaceFiles();
+      setSelectedFilePaths([]);
+    }
+  }, [isAiModalOpen]);
+
+  const handleGenerateBackground = async () => {
+    const selectedFileOnlyPaths = selectedFilePaths.filter(path => flatFiles.includes(path));
+    if (selectedFileOnlyPaths.length === 0) {
+      message.warning('请至少选择一个参考文件');
+      return;
+    }
+
+    if (!settings.llmApiKey) {
+      message.warning('大模型 API Key 尚未配置，请先在设置页中配置');
+      return;
+    }
+
+    setIsGenerating(true);
+    try {
+      // 1. Read files
+      let combinedText = '';
+      for (const path of selectedFileOnlyPaths) {
+        const fileContent: string = await invoke('read_file', { path });
+        const fileName = path.split(/[\\/]/).pop() || '';
+        combinedText += `\n\n### 文件: ${fileName}\n${fileContent}`;
+      }
+
+      // 2. Invoke Rust backend generate_background_items command
+      const resultString = await invoke<string>('generate_background_items', {
+        request: {
+          modelInterface: settings.modelInterface,
+          baseUrl: settings.llmBaseUrl,
+          apiKey: settings.llmApiKey,
+          model: settings.llmModel,
+          text: combinedText,
+        }
+      });
+
+      // 3. Parse JSON & Import
+      const data = JSON.parse(resultString);
+      importGeneratedItems(data);
+
+      message.success('背景设定 AI 一键生成成功！已自动创建并选中相应项目。');
+      setIsAiModalOpen(false);
+    } catch (err) {
+      console.error('AI 生成设定失败:', err);
+      message.error(`AI 提取设定失败：${String(err)}`);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleOptimizeMemories = async (currentEvents: string) => {
+    if (!currentEvents.trim()) {
+      message.warning('当前关键事件记忆内容为空，无法进行浓缩与消解矛盾');
+      return;
+    }
+
+    if (!settings.llmApiKey) {
+      message.warning('大模型 API Key 尚未配置，请先在设置页中配置');
+      return;
+    }
+
+    setIsOptimizing(true);
+    try {
+      const optimized: string = await invoke('optimize_character_memories', {
+        request: {
+          modelInterface: settings.modelInterface,
+          baseUrl: settings.llmBaseUrl,
+          apiKey: settings.llmApiKey,
+          model: settings.llmModel,
+          text: currentEvents,
+        }
+      });
+
+      setOptimizedEvents(optimized);
+      setIsMemModalOpen(true);
+    } catch (err) {
+      console.error('记忆优化失败:', err);
+      message.error(`记忆浓缩优化失败：${String(err)}`);
+    } finally {
+      setIsOptimizing(false);
+    }
+  };
+
+  const handleConfirmOptimize = () => {
+    if (selectedItem) {
+      updateItemFields(selectedItem.id, selectedItem.type, { keyEvents: optimizedEvents });
+      message.success('关键事件记忆更新成功！');
+      setIsMemModalOpen(false);
+    }
+  };
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
@@ -642,20 +833,61 @@ const Background: React.FC = () => {
         label: '角色记忆',
         children: (
           <Space direction="vertical" size={16} style={{ width: '100%', marginTop: 8 }}>
-            <Card className="custom-sub-card" title="角色长期记忆（大模型提取或手动输入）" size="small">
+            <Card className="custom-sub-card" title="与用户关系设定（大模型提取或手动输入）" size="small">
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                 <div>
-                  <div className="input-label">关系记忆</div>
-                  <Input.TextArea 
-                    value={fields.relationMemory || ''} 
-                    autoSize={{ minRows: 3, maxRows: 6 }}
+                  <div className="input-label">与用户关系类型</div>
+                  <Input 
+                    value={fields.userRelationType || ''} 
                     className="custom-form-input"
-                    placeholder="描述该角色与用户当前的关系，例如双方的信任程度、共同立场或情感羁绊..."
-                    onChange={(e) => handleFieldChange('relationMemory', e.target.value)}
+                    placeholder="例如：欢喜冤家、生死之交、师徒、针锋相对的竞争对手..."
+                    onChange={(e) => handleFieldChange('userRelationType', e.target.value)}
                   />
                 </div>
                 <div>
-                  <div className="input-label">关键事件</div>
+                  <div className="input-label">与用户相处模式</div>
+                  <Input.TextArea 
+                    value={fields.userInteractionModel || ''} 
+                    autoSize={{ minRows: 2, maxRows: 4 }}
+                    className="custom-form-input"
+                    placeholder="描述该角色如何与用户互动交往。例如：表面上冷嘲热讽但关键时刻极其护短、以礼相待保持分寸、主动热情爱开玩笑..."
+                    onChange={(e) => handleFieldChange('userInteractionModel', e.target.value)}
+                  />
+                </div>
+                <div>
+                  <div className="input-label">与用户关系底线</div>
+                  <Input.TextArea 
+                    value={fields.userRelationBottomLine || ''} 
+                    autoSize={{ minRows: 2, maxRows: 4 }}
+                    className="custom-form-input"
+                    placeholder="描述该角色在与用户相处时的底线。例如：绝对不能容忍欺骗、一旦涉及家族利益会优先站在家族立场、禁止打听其右手烙印的秘密..."
+                    onChange={(e) => handleFieldChange('userRelationBottomLine', e.target.value)}
+                  />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <div className="input-label" style={{ margin: 0 }}>关键事件</div>
+                    <Button
+                      type="text"
+                      size="small"
+                      disabled={isOptimizing}
+                      icon={isOptimizing ? <LoadingOutlined spin /> : <ThunderboltOutlined style={{ color: '#d97757' }} />}
+                      onClick={() => handleOptimizeMemories(fields.keyEvents || '')}
+                      style={{
+                        fontSize: '11px',
+                        color: '#d97757',
+                        background: '#faf6f0',
+                        border: '1px solid #f2e8dc',
+                        borderRadius: '4px',
+                        height: '22px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}
+                    >
+                      {isOptimizing ? 'AI 优化中...' : 'AI 浓缩与优化'}
+                    </Button>
+                  </div>
                   <Input.TextArea 
                     value={fields.keyEvents || ''} 
                     autoSize={{ minRows: 4, maxRows: 8 }}
@@ -855,6 +1087,26 @@ const Background: React.FC = () => {
           }}>
             背景设定
           </span>
+          <Button
+            type="text"
+            size="small"
+            icon={<RobotOutlined style={{ color: '#d97757' }} />}
+            onClick={() => setIsAiModalOpen(true)}
+            style={{
+              fontSize: '12px',
+              color: '#d97757',
+              background: '#faf6f0',
+              border: '1px solid #f2e8dc',
+              borderRadius: '4px',
+              padding: '2px 8px',
+              height: '24px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4
+            }}
+          >
+            AI 智能提取
+          </Button>
         </div>
 
         {/* Directory Scrollable Area */}
@@ -1071,6 +1323,150 @@ const Background: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Background AI Extraction Modal */}
+      <Modal
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#33312e', fontSize: '16px', fontWeight: 600 }}>
+            <RobotOutlined style={{ color: '#d97757' }} />
+            <span>AI 智能提取背景设定</span>
+          </div>
+        }
+        open={isAiModalOpen}
+        onCancel={() => !isGenerating && setIsAiModalOpen(false)}
+        onOk={handleGenerateBackground}
+        okText="开始智能提取"
+        cancelText="取消"
+        confirmLoading={isGenerating}
+        width={640}
+        okButtonProps={{ disabled: isGenerating }}
+        styles={{
+          body: { padding: '16px 24px' }
+        }}
+      >
+        {isGenerating ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 0', gap: '16px' }}>
+            <Spin indicator={<LoadingOutlined style={{ fontSize: 32, color: '#d97757' }} spin />} />
+            <div style={{ color: '#8c8882', fontSize: '13px' }}>
+              AI 正在深度阅读并总结提炼背景设定中，请稍候...
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ padding: '12px 16px', background: '#faf6f0', borderRadius: '8px', border: '1px solid #f2e8dc', color: '#8c8882', fontSize: '12px', lineHeight: 1.5 }}>
+              <InfoCircleOutlined style={{ color: '#d97757', marginRight: 6 }} />
+              <strong>提示：</strong>选择您已有的作品、大纲或参考范文（可多选），大模型将自动阅读并为您整理提炼出一本结构化的世界书设定及相关的角色卡，并在左侧目录中创建。
+            </div>
+
+            <div style={{ maxHeight: '380px', overflowY: 'auto', paddingRight: '4px' }}>
+              {/* Category: Works */}
+              <div style={{ marginBottom: '16px', background: '#fafafa', padding: '12px', borderRadius: '6px', border: '1px solid rgba(0,0,0,0.03)' }}>
+                <div style={{ fontWeight: 600, fontSize: '13px', color: '#33312e', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <BookOutlined style={{ color: '#d97757' }} />
+                  <span>我的作品 (Articles)</span>
+                </div>
+                {articlesTree.length === 0 ? (
+                  <div style={{ color: '#c0bbb4', fontSize: '12px', paddingLeft: '24px', fontStyle: 'italic' }}>暂无作品文件夹及文件</div>
+                ) : (
+                  <Tree
+                    checkable
+                    selectable={false}
+                    checkedKeys={selectedFilePaths}
+                    onCheck={(keys) => {
+                      const checkedList = Array.isArray(keys) ? keys : keys.checked;
+                      setSelectedFilePaths(checkedList.map(String));
+                    }}
+                    treeData={articlesTree}
+                    style={{ background: 'transparent', fontSize: '13px' }}
+                  />
+                )}
+              </div>
+
+              {/* Category: Outline */}
+              <div style={{ marginBottom: '16px', background: '#fafafa', padding: '12px', borderRadius: '6px', border: '1px solid rgba(0,0,0,0.03)' }}>
+                <div style={{ fontWeight: 600, fontSize: '13px', color: '#33312e', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <CompassOutlined style={{ color: '#d97757' }} />
+                  <span>故事大纲 (Outline)</span>
+                </div>
+                {outlineTree.length === 0 ? (
+                  <div style={{ color: '#c0bbb4', fontSize: '12px', paddingLeft: '24px', fontStyle: 'italic' }}>暂无大纲文件夹及文件</div>
+                ) : (
+                  <Tree
+                    checkable
+                    selectable={false}
+                    checkedKeys={selectedFilePaths}
+                    onCheck={(keys) => {
+                      const checkedList = Array.isArray(keys) ? keys : keys.checked;
+                      setSelectedFilePaths(checkedList.map(String));
+                    }}
+                    treeData={outlineTree}
+                    style={{ background: 'transparent', fontSize: '13px' }}
+                  />
+                )}
+              </div>
+
+              {/* Category: References */}
+              <div style={{ marginBottom: '8px', background: '#fafafa', padding: '12px', borderRadius: '6px', border: '1px solid rgba(0,0,0,0.03)' }}>
+                <div style={{ fontWeight: 600, fontSize: '13px', color: '#33312e', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <GlobalOutlined style={{ color: '#d97757' }} />
+                  <span>范文库/参考 (References)</span>
+                </div>
+                {referencesTree.length === 0 ? (
+                  <div style={{ color: '#c0bbb4', fontSize: '12px', paddingLeft: '24px', fontStyle: 'italic' }}>暂无参考文件夹及文件</div>
+                ) : (
+                  <Tree
+                    checkable
+                    selectable={false}
+                    checkedKeys={selectedFilePaths}
+                    onCheck={(keys) => {
+                      const checkedList = Array.isArray(keys) ? keys : keys.checked;
+                      setSelectedFilePaths(checkedList.map(String));
+                    }}
+                    treeData={referencesTree}
+                    style={{ background: 'transparent', fontSize: '13px' }}
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Memory Optimization Review Modal */}
+      <Modal
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#33312e', fontSize: '16px', fontWeight: 600 }}>
+            <FileProtectOutlined style={{ color: '#d97757' }} />
+            <span>AI 优化与消解逻辑矛盾记忆预览</span>
+          </div>
+        }
+        open={isMemModalOpen}
+        onCancel={() => setIsMemModalOpen(false)}
+        onOk={handleConfirmOptimize}
+        okText="确认更新写入角色卡"
+        cancelText="取消"
+        width={680}
+        styles={{
+          body: { padding: '16px 24px' }
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div style={{ padding: '10px 14px', background: '#faf6f0', borderRadius: '8px', border: '1px solid #f2e8dc', color: '#8c8882', fontSize: '12px', lineHeight: 1.5 }}>
+            <strong>记忆优化已完成：</strong>大模型已消解逻辑矛盾并浓缩整理完毕。您可以在下方编辑框中直接微调修改，点击“确认更新”即可同步回该角色的“关键事件”中。
+          </div>
+          <div>
+            <div style={{ fontSize: '12px', fontWeight: 500, color: '#8c8882', marginBottom: '6px' }}>优化后的关键事件</div>
+            <Input.TextArea
+              value={optimizedEvents}
+              onChange={(e) => setOptimizedEvents(e.target.value)}
+              autoSize={{ minRows: 10, maxRows: 16 }}
+              className="custom-form-input custom-form-input-focused"
+              placeholder="请输入优化后的关键事件记忆内容..."
+              style={{ borderRadius: '6px', fontSize: '13px', lineHeight: 1.6 }}
+            />
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

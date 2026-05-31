@@ -56,7 +56,10 @@ export interface PartnerItemFields {
   typicalReactions?: string;
 
   // 角色记忆
-  relationMemory?: string; // 关系记忆
+  relationMemory?: string; // 关系记忆 (向下兼容保留)
+  userRelationType?: string; // 与用户关系类型
+  userInteractionModel?: string; // 与用户相处模式
+  userRelationBottomLine?: string; // 与用户关系底线
   keyEvents?: string;      // 关键事件
 }
 
@@ -80,6 +83,10 @@ interface PartnerState {
   updateItemName: (id: string, type: 'world_book' | 'character_card', name: string) => void;
   updateItemContent: (id: string, type: 'world_book' | 'character_card', content: string) => void;
   updateItemFields: (id: string, type: 'world_book' | 'character_card', fields: PartnerItemFields) => void;
+  importGeneratedItems: (items: {
+    worldBooks: Array<{ name: string; fields: PartnerItemFields }>;
+    characterCards: Array<{ name: string; fields: PartnerItemFields }>;
+  }) => void;
 }
 
 export const compileItemToMarkdown = (name: string, type: 'world_book' | 'character_card', fields: PartnerItemFields): string => {
@@ -124,7 +131,10 @@ export const compileItemToMarkdown = (name: string, type: 'world_book' | 'charac
       `## 人际关系\n${fields.relationships || ''}\n\n` +
       `## 说话方式\n${fields.speakingStyle || ''}\n\n` +
       `## 典型反应\n${fields.typicalReactions || ''}\n\n` +
-      `## 关系记忆\n${fields.relationMemory || ''}\n\n` +
+      `## 角色记忆\n` +
+      `- **与用户关系类型**：${fields.userRelationType || ''}\n` +
+      `- **与用户相处模式**：${fields.userInteractionModel || ''}\n` +
+      `- **与用户关系底线**：${fields.userRelationBottomLine || ''}\n\n` +
       `## 关键事件\n${fields.keyEvents || ''}`;
   }
 };
@@ -247,6 +257,9 @@ export const usePartnerStore = create<PartnerState>()(
           speakingStyle: '',
           typicalReactions: '',
           relationMemory: '',
+          userRelationType: '',
+          userInteractionModel: '',
+          userRelationBottomLine: '',
           keyEvents: ''
         };
         const name = '未命名角色卡';
@@ -380,6 +393,54 @@ export const usePartnerStore = create<PartnerState>()(
             }),
           };
         }
+      }),
+
+      importGeneratedItems: (items) => set((state) => {
+        const time = Date.now();
+        const newWorldBooks: PartnerItem[] = (items.worldBooks || []).map((wb, index) => {
+          const id = `wb-ai-${time}-${index}`;
+          const fields = wb.fields || {};
+          return {
+            id,
+            name: wb.name || '未命名世界书',
+            type: 'world_book',
+            content: compileItemToMarkdown(wb.name || '未命名世界书', 'world_book', fields),
+            fields
+          };
+        });
+
+        const newCharacterCards: PartnerItem[] = (items.characterCards || []).map((cc, index) => {
+          const id = `cc-ai-${time}-${index}`;
+          const fields = cc.fields || {};
+          return {
+            id,
+            name: cc.name || '未命名角色卡',
+            type: 'character_card',
+            content: compileItemToMarkdown(cc.name || '未命名角色卡', 'character_card', fields),
+            fields
+          };
+        });
+
+        const nextWorldBooks = [...state.worldBooks, ...newWorldBooks];
+        const nextCharacterCards = [...state.characterCards, ...newCharacterCards];
+
+        let selectedId = state.selectedId;
+        let selectedType = state.selectedType;
+
+        if (newWorldBooks.length > 0) {
+          selectedId = newWorldBooks[0].id;
+          selectedType = 'world_book';
+        } else if (newCharacterCards.length > 0) {
+          selectedId = newCharacterCards[0].id;
+          selectedType = 'character_card';
+        }
+
+        return {
+          worldBooks: nextWorldBooks,
+          characterCards: nextCharacterCards,
+          selectedId,
+          selectedType
+        };
       }),
     }),
     {
