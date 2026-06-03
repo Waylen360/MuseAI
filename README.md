@@ -103,6 +103,8 @@ MuseAI 是一款运行在你本地电脑上的 AI 写作桌面应用，无需上
 
 前往 [Releases 页面](https://github.com/yejiming/MuseAI/releases) 下载最新版本的安装包（`.dmg`/`.exe`），双击安装后即可启动。
 
+**Windows 用户**：安装前请**关闭杀毒软件**（如 360、腾讯电脑管家、火绒、Windows Defender 等），否则安装程序可能被误拦截导致安装失败或运行异常。安装完成后可重新开启。
+
 macOS 用户安装后如果提示"已损坏，无法打开"，请打开终端运行以下命令后再启动：
 
 ```bash
