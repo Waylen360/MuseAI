@@ -16,7 +16,7 @@ import {
   InfoCircleOutlined,
   LoadingOutlined
 } from '@ant-design/icons';
-import { usePartnerStore, PartnerItem, PartnerItemFields } from '../stores/usePartnerStore';
+import { usePartnerStore, PartnerItem, PartnerItemFields, CustomField } from '../stores/usePartnerStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { invoke } from '@tauri-apps/api/core';
 import ReactMarkdown from 'react-markdown';
@@ -34,8 +34,11 @@ const Background: React.FC = () => {
     addCharacterCard,
     selectItem,
     deleteItem,
-      updateItemName,
-    updateItemFields
+    updateItemName,
+    updateItemFields,
+    addCustomField,
+    updateCustomField,
+    removeCustomField
   } = usePartnerStore();
 
   const settings = useSettingsStore();
@@ -277,6 +280,58 @@ const Background: React.FC = () => {
     }
   };
 
+  // Render custom fields for a given module
+  const renderCustomFieldsBlock = (item: PartnerItem, moduleId: string) => {
+    const fields = item.fields?.customFields?.filter((f: CustomField) => f.moduleId === moduleId) || [];
+
+    return (
+      <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px dashed rgba(0,0,0,0.06)' }}>
+        <Row gutter={[16, 16]}>
+          {fields.map((field: CustomField) => (
+            <Col span={8} key={field.id}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <Input
+                    value={field.label}
+                    placeholder="字段名"
+                    onChange={(e) => updateCustomField(item.id, item.type, field.id, { label: e.target.value })}
+                    style={{ flex: 1, fontSize: 12, fontWeight: 500 }}
+                    className="custom-form-input"
+                  />
+                  <Tooltip title="删除">
+                    <Button
+                      type="text"
+                      danger
+                      size="small"
+                      icon={<DeleteOutlined style={{ fontSize: 12 }} />}
+                      onClick={() => removeCustomField(item.id, item.type, field.id)}
+                      style={{ width: 22, height: 22, padding: 0 }}
+                    />
+                  </Tooltip>
+                </div>
+                <Input
+                  value={field.value}
+                  placeholder={`请输入${field.label || '内容'}`}
+                  onChange={(e) => updateCustomField(item.id, item.type, field.id, { value: e.target.value })}
+                  className="custom-form-input"
+                />
+              </div>
+            </Col>
+          ))}
+        </Row>
+        <Button
+          type="dashed"
+          size="small"
+          icon={<PlusOutlined />}
+          onClick={() => addCustomField(item.id, item.type, moduleId)}
+          style={{ marginTop: 16, height: 28, fontSize: 12, color: '#8c8882', borderColor: 'rgba(0,0,0,0.1)' }}
+        >
+          添加自定义字段
+        </Button>
+      </div>
+    );
+  };
+
   // Tag manipulation for Character Card
   const handleRemoveTag = (removedTag: string) => {
     if (selectedItem) {
@@ -445,6 +500,7 @@ const Background: React.FC = () => {
               />
             </Col>
           </Row>
+          {renderCustomFieldsBlock(item, 'world_basic')}
         </Card>
 
         <Card className="custom-form-card" title={<span className="form-section-title"><GlobalOutlined style={{ color: '#d97757' }} /> 核心世界观架构</span>} size="small">
@@ -499,6 +555,7 @@ const Background: React.FC = () => {
                 onChange={(e) => handleFieldChange('conflict', e.target.value)}
               />
             </div>
+            {renderCustomFieldsBlock(item, 'world_core')}
           </Space>
         </Card>
       </Space>
@@ -635,6 +692,7 @@ const Background: React.FC = () => {
                 )}
               </div>
             </Card>
+            {renderCustomFieldsBlock(item, 'char_basic')}
           </Space>
         )
       },
@@ -758,6 +816,7 @@ const Background: React.FC = () => {
                 </Row>
               </Space>
             </Card>
+            {renderCustomFieldsBlock(item, 'char_appearance')}
           </Space>
         )
       },
@@ -825,6 +884,7 @@ const Background: React.FC = () => {
                 </div>
               </Space>
             </Card>
+            {renderCustomFieldsBlock(item, 'char_ability')}
           </Space>
         )
       },
@@ -898,6 +958,7 @@ const Background: React.FC = () => {
                 </div>
               </Space>
             </Card>
+            {renderCustomFieldsBlock(item, 'char_memory')}
           </Space>
         )
       }

@@ -2,6 +2,13 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { createDiskStorage } from './diskStorage';
 
+export interface CustomField {
+  id: string;
+  moduleId: string;
+  label: string;
+  value: string;
+}
+
 export interface PartnerItemFields {
   // 世界书字段
   theme?: string;         // 主题
@@ -62,6 +69,9 @@ export interface PartnerItemFields {
   userInteractionModel?: string; // 与用户相处模式
   userRelationBottomLine?: string; // 与用户关系底线
   keyEvents?: string;      // 关键事件
+
+  // 自定义字段
+  customFields?: CustomField[];
 }
 
 export interface PartnerItem {
@@ -84,23 +94,56 @@ interface PartnerState {
   updateItemName: (id: string, type: 'world_book' | 'character_card', name: string) => void;
   updateItemContent: (id: string, type: 'world_book' | 'character_card', content: string) => void;
   updateItemFields: (id: string, type: 'world_book' | 'character_card', fields: PartnerItemFields) => void;
+  addCustomField: (id: string, type: 'world_book' | 'character_card', moduleId: string) => void;
+  updateCustomField: (id: string, type: 'world_book' | 'character_card', fieldId: string, updates: Partial<Pick<CustomField, 'label' | 'value'>>) => void;
+  removeCustomField: (id: string, type: 'world_book' | 'character_card', fieldId: string) => void;
   importGeneratedItems: (items: {
     worldBooks: Array<{ name: string; fields: PartnerItemFields }>;
     characterCards: Array<{ name: string; fields: PartnerItemFields }>;
   }) => void;
 }
 
+const MODULE_NAMES: Record<string, string> = {
+  world_basic: '基本世界设定',
+  world_core: '核心世界观架构',
+  char_basic: '基础与标签',
+  char_appearance: '外貌与性格',
+  char_ability: '能力与经历',
+  char_memory: '角色记忆',
+};
+
 const formatFieldLine = (label: string, value?: string) => {
   const trimmed = (value || '').trim();
   return trimmed ? `- **${label}**：${trimmed}` : '';
 };
 
-
-
 const buildListSection = (title: string, items: { label: string; value?: string }[]) => {
   const lines = items.map(i => formatFieldLine(i.label, i.value)).filter(Boolean);
   if (lines.length === 0) return '';
   return `## ${title}\n${lines.join('\n')}\n\n`;
+};
+
+const buildCustomFieldsSection = (title: string, fields: CustomField[]) => {
+  const lines = fields.map(f => formatFieldLine(f.label, f.value)).filter(Boolean);
+  if (lines.length === 0) return '';
+  return `### ${title}\n${lines.join('\n')}\n\n`;
+};
+
+const compileCustomFields = (fields?: CustomField[]): string => {
+  if (!fields || fields.length === 0) return '';
+
+  const byModule: Record<string, CustomField[]> = {};
+  fields.forEach(f => {
+    if (!byModule[f.moduleId]) byModule[f.moduleId] = [];
+    byModule[f.moduleId].push(f);
+  });
+
+  const sections = Object.entries(byModule)
+    .map(([moduleId, moduleFields]) => buildCustomFieldsSection(MODULE_NAMES[moduleId] || moduleId, moduleFields))
+    .filter(Boolean);
+
+  if (sections.length === 0) return '';
+  return `## 自定义补充设定\n\n${sections.join('')}`;
 };
 
 export const compileItemToMarkdown = (name: string, type: 'world_book' | 'character_card', fields: PartnerItemFields): string => {
@@ -116,7 +159,8 @@ export const compileItemToMarkdown = (name: string, type: 'world_book' | 'charac
     const cultural = (fields.culturalFeatures || '').trim() ? `## 文化特色\n${fields.culturalFeatures}\n\n` : '';
     const history = (fields.history || '').trim() ? `## 历史事件\n${fields.history}\n\n` : '';
     const conflict = (fields.conflict || '').trim() ? `## 核心矛盾\n${fields.conflict}\n\n` : '';
-    return `# ${name}\n\n${core}${geography}${keyScenes}${cultural}${history}${conflict}`.trim() + '\n';
+    const custom = compileCustomFields(fields.customFields);
+    return `# ${name}\n\n${core}${geography}${keyScenes}${cultural}${history}${conflict}${custom}`.trim() + '\n';
   } else {
     const tagsStr = (fields.identityTags || []).map(t => `\`${t}\``).join(' ');
     const basic = buildListSection('基础信息', [
@@ -154,7 +198,8 @@ export const compileItemToMarkdown = (name: string, type: 'world_book' | 'charac
       { label: '与用户关系底线', value: fields.userRelationBottomLine },
     ]);
     const events = (fields.keyEvents || '').trim() ? `## 关键事件\n${fields.keyEvents}\n\n` : '';
-    return `# 角色卡：${name}\n\n${basic}${identity}${appearance}${personality}${skills}${background}${relationships}${speaking}${reactions}${memory}${events}`.trim() + '\n';
+    const custom = compileCustomFields(fields.customFields);
+    return `# 角色卡：${name}\n\n${basic}${identity}${appearance}${personality}${skills}${background}${relationships}${speaking}${reactions}${memory}${events}${custom}`.trim() + '\n';
   }
 };
 
@@ -412,6 +457,73 @@ export const usePartnerStore = create<PartnerState>()(
             }),
           };
         }
+      }),
+
+      addCustomField: (id, type, moduleId) => set((state) => {
+        const newField: CustomField = {
+          id: `cf-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          moduleId,
+          label: '自定义字段',
+          value: ''
+        };
+        const updateItems = (items: PartnerItem[]) => items.map((item) => {
+          if (item.id !== id) return item;
+          const nextFields = {
+            ...(item.fields || {}),
+            customFields: [...(item.fields?.customFields || []), newField]
+          };
+          return {
+            ...item,
+            fields: nextFields,
+            content: compileItemToMarkdown(item.name, item.type, nextFields)
+          };
+        });
+        if (type === 'world_book') {
+          return { worldBooks: updateItems(state.worldBooks) };
+        }
+        return { characterCards: updateItems(state.characterCards) };
+      }),
+
+      updateCustomField: (id, type, fieldId, updates) => set((state) => {
+        const updateItems = (items: PartnerItem[]) => items.map((item) => {
+          if (item.id !== id) return item;
+          const nextCustomFields = (item.fields?.customFields || []).map((f) =>
+            f.id === fieldId ? { ...f, ...updates } : f
+          );
+          const nextFields = {
+            ...(item.fields || {}),
+            customFields: nextCustomFields
+          };
+          return {
+            ...item,
+            fields: nextFields,
+            content: compileItemToMarkdown(item.name, item.type, nextFields)
+          };
+        });
+        if (type === 'world_book') {
+          return { worldBooks: updateItems(state.worldBooks) };
+        }
+        return { characterCards: updateItems(state.characterCards) };
+      }),
+
+      removeCustomField: (id, type, fieldId) => set((state) => {
+        const updateItems = (items: PartnerItem[]) => items.map((item) => {
+          if (item.id !== id) return item;
+          const nextCustomFields = (item.fields?.customFields || []).filter((f) => f.id !== fieldId);
+          const nextFields = {
+            ...(item.fields || {}),
+            customFields: nextCustomFields
+          };
+          return {
+            ...item,
+            fields: nextFields,
+            content: compileItemToMarkdown(item.name, item.type, nextFields)
+          };
+        });
+        if (type === 'world_book') {
+          return { worldBooks: updateItems(state.worldBooks) };
+        }
+        return { characterCards: updateItems(state.characterCards) };
       }),
 
       importGeneratedItems: (items) => set((state) => {
