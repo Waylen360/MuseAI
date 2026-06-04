@@ -384,7 +384,7 @@ const MobileChat: React.FC = () => {
       const result = await appInvoke<string | Record<string, any>>('analyze_character_memory', { sessionId });
       const parsed = parseArchiveAnalysisResponse(result);
       setArchiveAnalysis(parsed);
-      setEditedTitle(parsed.sessionTitle || sessionTitle);
+      setEditedTitle(parsed.sessionTitle || parsed.recommendedSessionTitle || sessionTitle);
       setEditedRelationType(parsed.userRelationType || '');
       setEditedRelationModel(parsed.userInteractionModel || '');
       setEditedRelationBottomLine(parsed.userRelationBottomLine || '');

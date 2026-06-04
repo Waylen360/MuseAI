@@ -89,6 +89,7 @@ describe('Runtime Utility & Bridge', () => {
       const result = await appInvoke<any>('get_mobile_service_status');
       expect(result.isRunning).toBe(true);
       expect(mockFetch).toHaveBeenCalledWith('http://localhost:3000/api/mobile/status', {
+        cache: 'no-store',
         headers: {
           'Content-Type': 'application/json',
           'X-Mobile-Token': 'secret-token',
@@ -106,6 +107,7 @@ describe('Runtime Utility & Bridge', () => {
       const result = await appInvoke<any>('list_agent_sessions', { prefix: 'partner-session-' });
       expect(result).toEqual([]);
       expect(mockFetch).toHaveBeenCalledWith('http://localhost:3000/api/mobile/sessions?prefix=partner-session-', {
+        cache: 'no-store',
         headers: {
           'Content-Type': 'application/json',
           'X-Mobile-Token': 'secret-token',
@@ -129,6 +131,7 @@ describe('Runtime Utility & Bridge', () => {
           'Content-Type': 'application/json',
           'X-Mobile-Token': 'secret-token',
         },
+        cache: 'no-store',
         body: JSON.stringify(sessionObj),
       });
     });
@@ -177,6 +180,7 @@ describe('Runtime Utility & Bridge', () => {
           'Content-Type': 'application/json',
           'X-Mobile-Token': 'secret-token',
         },
+        cache: 'no-store',
         body: JSON.stringify(reqBody),
       });
     });
