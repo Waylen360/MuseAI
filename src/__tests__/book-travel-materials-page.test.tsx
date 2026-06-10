@@ -96,7 +96,8 @@ describe('BookTravelMaterials page', () => {
     fireEvent.click(screen.getByRole('button', { name: /开始装配/ }));
 
     expect((await screen.findAllByText('第一卷.md · 云州世界书')).length).toBeGreaterThan(0);
-    expect(screen.getByText('小说开篇')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: /入场点/ }));
+    expect(await screen.findAllByDisplayValue('小说开篇')).not.toHaveLength(0);
     expect(useBookTravelStore.getState().assembledMaterials[0].materials.outline.content).toBe('第一卷大纲正文');
   });
 

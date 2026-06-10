@@ -46,7 +46,9 @@ export interface BookTravelScene {
 export interface BookTravelTurnSnapshot {
   id: string;
   userInput: string;
-  classification: 'meta' | 'insert-beat' | 'change-scene';
+  classification?: 'insert-beat' | 'change-scene';
+  status?: 'classifying' | 'writing' | 'done' | 'error';
+  failedStage?: 'classifying' | 'planning' | 'writing';
   plannerOutput?: unknown;
   narrativeOutput: string;
   stateSnapshot: unknown;
@@ -138,6 +140,7 @@ interface BookTravelState extends BookTravelSnapshot {
   setCurrentBeatId: (beatId: string | null) => void;
   advanceBeat: (sceneId: string, beatId: string) => void;
   appendTurn: (turn: BookTravelTurnSnapshot) => void;
+  updateTurn: (id: string, patch: Partial<Omit<BookTravelTurnSnapshot, 'id'>>) => void;
   removeLastTurn: () => void;
   removeLastBeatFromCurrentScene: () => void;
   updateSummaryMemory: (summaryMemory: string) => void;
@@ -239,6 +242,11 @@ export const useBookTravelStore = create<BookTravelState>()(
       setCurrentBeatId: (currentBeatId) => set({ currentBeatId }),
       advanceBeat: (currentSceneId, currentBeatId) => set({ currentSceneId, currentBeatId }),
       appendTurn: (turn) => set((state) => ({ turns: [...state.turns, turn] })),
+      updateTurn: (id, patch) => set((state) => ({
+        turns: state.turns.map((turn) => (
+          turn.id === id ? { ...turn, ...patch } : turn
+        )),
+      })),
       removeLastTurn: () => set((state) => ({ turns: state.turns.slice(0, -1) })),
       removeLastBeatFromCurrentScene: () => set((state) => {
         const sceneIndex = state.scenes.findIndex((s) => s.id === state.currentSceneId);

@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
+import { Modal } from 'antd';
 import Story from '../pages/Story';
 import { usePartnerStore } from '../stores/usePartnerStore';
 import { useStoryStore } from '../stores/useStoryStore';
@@ -10,21 +11,40 @@ function renderWithRouter(ui: React.ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>);
 }
 
-const invokeMock = vi.fn(async (command: string, _args?: any) => {
+function emitBookTravelEvent(payload: any) {
+  const handlers = (globalThis as any).eventHandlers?.['book-travel-stream'] || [];
+  handlers.forEach((handler: any) => handler({ payload }));
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+const defaultInvoke = async (command: string, args?: any): Promise<any> => {
   if (command === 'list_agent_sessions') return [];
-  if (command === 'plan_book_travel_scene') {
-    return JSON.stringify({
-      stateChanges: { time: '第一夜', location: '沈府' },
-      divergence: '无',
-      storyProgress: 1,
-      endingStatus: 'none',
-      sceneGoals: ['调查替嫁真相'],
-      entryBeatGuidance: '醒来在喜房',
-      allowedCast: ['林晚', '沈霜'],
-      writerInstructions: '渲染喜房红烛气氛'
-    });
+  if (command === 'classify_book_travel_input') return { classification: 'insert-beat', reason: '当前场景内互动' };
+  if (command === 'start_write_book_travel_insert_beat_stream') {
+    const runId = 'insert-run';
+    setTimeout(() => {
+      emitBookTravelEvent({
+        runId,
+        eventType: 'done',
+        message: JSON.stringify({
+          id: 'scene-1',
+          beat: { id: 'beat-2', content: `她回应了：${args?.userInput}` },
+          volatileMemoryPatch: { lastAction: args?.userInput },
+        }),
+      });
+    }, 0);
+    return { runId };
   }
-  if (command === 'write_book_travel_change_scene') {
+  if (command === 'plan_book_travel_scene') {
     return JSON.stringify({
       id: 'scene-1',
       title: '醒在婚宴',
@@ -32,7 +52,44 @@ const invokeMock = vi.fn(async (command: string, _args?: any) => {
       currentSituation: '红烛高照',
       time: '第一夜',
       location: '沈府喜房',
-      activeCharacters: ['林晚'],
+      activeCharacters: ['林晚', '沈霜'],
+      stateChanges: {},
+      divergence: '无',
+      storyProgress: 1,
+      endingStatus: 'none',
+      sceneGoals: ['调查替嫁真相'],
+      entryBeatGuidance: '醒来在喜房',
+      writerInstructions: '渲染喜房红烛气氛'
+    });
+  }
+  if (command === 'start_plan_book_travel_scene_stream') {
+    const runId = 'planner-run';
+    setTimeout(() => {
+      emitBookTravelEvent({
+        runId,
+        eventType: 'done',
+        message: JSON.stringify({
+          id: 'scene-1',
+          title: '醒在婚宴',
+          summary: '喜房苏醒',
+          currentSituation: '红烛高照',
+          time: '第一夜',
+          location: '沈府喜房',
+          activeCharacters: ['林晚', '沈霜'],
+          stateChanges: {},
+          divergence: '无',
+          storyProgress: 1,
+          endingStatus: 'none',
+          sceneGoals: ['调查替嫁真相'],
+          entryBeatGuidance: '醒来在喜房',
+          writerInstructions: '渲染喜房红烛气氛'
+        }),
+      });
+    }, 0);
+    return { runId };
+  }
+  if (command === 'write_book_travel_change_scene') {
+    return JSON.stringify({
       beat: {
         id: 'beat-1',
         content: '她在喜房里睁开眼。'
@@ -40,10 +97,30 @@ const invokeMock = vi.fn(async (command: string, _args?: any) => {
       volatileMemoryPatch: { clue: '红头盖' }
     });
   }
+  if (command === 'start_write_book_travel_change_scene_stream') {
+    const runId = 'change-writer-run';
+    setTimeout(() => {
+      emitBookTravelEvent({
+        runId,
+        eventType: 'done',
+        message: JSON.stringify({
+          beat: {
+            id: 'beat-1',
+            content: '她在喜房里睁开眼。'
+          },
+          volatileMemoryPatch: { clue: '红头盖' }
+        }),
+      });
+    }, 0);
+    return { runId };
+  }
   if (command === 'save_agent_session') return { id: 'story-session-test', title: '新故事', savedAt: Date.now(), sessionKind: 'bookTravel' };
+  if (command === 'summarize_book_travel_memory') return JSON.stringify({ summary: '林晚继续推进替嫁线。' });
   if (command === 'save_app_state' || command === 'load_app_state') return '';
   return undefined;
-});
+};
+
+const invokeMock = vi.fn(defaultInvoke);
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (command: string, args?: any) => invokeMock(command, args),
@@ -99,6 +176,7 @@ function resetStoryBookTravelStores() {
   useBookTravelStore.getState().resetSession();
   useBookTravelStore.setState({ assembledMaterials: [], selectedMaterialId: null });
   invokeMock.mockClear();
+  invokeMock.mockImplementation(defaultInvoke);
 }
 
 function saveReadyMaterial() {
@@ -135,8 +213,51 @@ function saveReadyMaterial() {
   });
 }
 
+function setActiveBookTravelScene() {
+  useBookTravelStore.setState({
+    selectedOutline: { id: '/outline/第一卷.md', title: '第一卷.md', path: '/outline/第一卷.md', content: '大纲正文' },
+    selectedWorldBook: { id: worldBook.id, title: worldBook.name, content: worldBook.content },
+    selectedCharacterCards: [{ id: characterCard.id, title: characterCard.name, content: characterCard.content }],
+    selectedEntryPointId: 'entry-1',
+    userCharacter: { name: '林晚', identity: '替嫁者', goal: '改写死局' },
+    currentState: { time: '第一夜', location: '沈府' },
+    stableMemory: { worldRules: ['灵契不可违背'] },
+    volatileMemory: { clues: ['红头盖'] },
+    assembledWorldModel: { originalTimeline: ['原线开局'] },
+    summaryMemory: '林晚在沈府喜房醒来，发现自己卷入替嫁局。',
+    scenes: [{
+      id: 'scene-1',
+      title: '沈府婚宴',
+      summary: '主角醒来',
+      currentSituation: '红烛未灭',
+      time: '第一夜',
+      location: '沈府',
+      activeCharacters: ['林晚', '沈霜'],
+      beats: [
+        {
+          id: 'beat-1',
+          content: '她在喜房里睁开眼。',
+        },
+      ],
+    }],
+    currentSceneId: 'scene-1',
+    currentBeatId: 'beat-1',
+    turns: [{
+      id: 'turn-1',
+      userInput: '醒来',
+      classification: 'change-scene' as const,
+      narrativeOutput: '她在喜房里睁开眼。',
+      stateSnapshot: { time: '第一夜', location: '沈府' },
+      createdSceneId: 'scene-1',
+      createdBeatIds: ['beat-1'],
+    }],
+  });
+}
+
 describe('Story book-travel mode', () => {
   beforeEach(() => {
+    Modal.destroyAll();
+    document.body.innerHTML = '';
     resetStoryBookTravelStores();
   });
 
@@ -251,5 +372,358 @@ describe('Story book-travel mode', () => {
 
     const startBtn = screen.getByRole('button', { name: /开始穿书/ });
     expect(startBtn).toBeEnabled();
+  });
+
+  it('switches to the conversation view and shows the planned scene while the first scene writer is running', async () => {
+    invokeMock.mockImplementation((command: string, args?: any) => {
+      if (command === 'start_plan_book_travel_scene_stream') {
+        return Promise.resolve({ runId: 'start-planner-run' });
+      }
+      if (command === 'start_write_book_travel_change_scene_stream') {
+        return Promise.resolve({ runId: 'start-writer-run' });
+      }
+      return defaultInvoke(command, args);
+    });
+    saveReadyMaterial();
+
+    renderWithRouter(<Story />);
+
+    const select = screen.getByRole('combobox');
+    fireEvent.mouseDown(select);
+    fireEvent.click(await screen.findByText('第一卷 · 云州入场'));
+    fireEvent.click(screen.getByRole('button', { name: /开始穿书/ }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('start_plan_book_travel_scene_stream', expect.anything());
+    });
+    emitBookTravelEvent({
+      runId: 'start-planner-run',
+      eventType: 'done',
+      message: JSON.stringify({
+        id: 'scene-start',
+        title: '猫头鹰来信',
+        summary: '林晚在旧宅收到一封不该出现的录取通知。',
+        currentSituation: '窗外雨声渐急，猫头鹰停在窗沿上，爪下压着一封烫金信。',
+        time: '1991年夏，清晨',
+        location: '女贞路4号周边',
+        activeCharacters: ['林晚', '哈利·波特', '弗农·德思礼'],
+        stateChanges: { letterStatus: '已送达' },
+        divergence: '用户以旁观者身份介入开局',
+        storyProgress: 3,
+        endingStatus: 'active',
+        sceneGoals: ['拿到入学信', '避免惊动德思礼家'],
+        entryBeatGuidance: '从猫头鹰落窗写起',
+        writerInstructions: '写猫头鹰来信的开场氛围',
+      }),
+    });
+
+    expect(await screen.findByText('猫头鹰来信')).toBeInTheDocument();
+    expect(screen.queryByText('选择穿书素材')).not.toBeInTheDocument();
+    expect(screen.getByText(/时间：1991年夏，清晨/)).toBeInTheDocument();
+    expect(screen.getByText(/地点：女贞路4号周边/)).toBeInTheDocument();
+    const situationCards = screen.getAllByTestId('scene-situation-card');
+    expect(situationCards[situationCards.length - 1]).toHaveTextContent('场景目标：拿到入学信、避免惊动德思礼家');
+    expect(situationCards[situationCards.length - 1]).toHaveTextContent('当前局势：窗外雨声渐急，猫头鹰停在窗沿上，爪下压着一封烫金信。');
+    expect(screen.getByText('林晚')).toBeInTheDocument();
+    expect(await screen.findByText(/场景写手正在书写/)).toBeInTheDocument();
+    expect(screen.queryByText('猫头鹰轻轻敲了敲窗。')).not.toBeInTheDocument();
+
+    emitBookTravelEvent({
+      runId: 'start-writer-run',
+      eventType: 'done',
+      message: JSON.stringify({
+        beat: { id: 'beat-start', content: '猫头鹰轻轻敲了敲窗。' },
+        volatileMemoryPatch: { letterStatus: '已读' },
+      }),
+    });
+
+    expect(await screen.findByText('猫头鹰轻轻敲了敲窗。')).toBeInTheDocument();
+  });
+
+  it('returns to the book-travel material setup when restarting the adventure', async () => {
+    setActiveBookTravelScene();
+    useBookTravelStore.setState({
+      assembledMaterials: [],
+      selectedMaterialId: 'material-1',
+    });
+
+    renderWithRouter(<Story />);
+
+    expect(screen.getByText('沈府婚宴')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重开新冒险' }));
+
+    expect(await screen.findByText('选择穿书素材')).toBeInTheDocument();
+    expect(screen.queryByText('沈府婚宴')).not.toBeInTheDocument();
+    expect(useBookTravelStore.getState().scenes).toHaveLength(0);
+    expect(useBookTravelStore.getState().selectedMaterialId).toBeNull();
+  });
+
+  it('shows book-travel status and recap from the composer status button', async () => {
+    setActiveBookTravelScene();
+
+    renderWithRouter(<Story />);
+
+    expect(screen.queryByText(/当前模式/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '状态' }));
+
+    expect(await screen.findAllByText('穿书状态')).not.toHaveLength(0);
+    expect(screen.getByText('当前状态')).toBeInTheDocument();
+    expect(screen.getAllByText(/林晚（替嫁者）/)).not.toHaveLength(0);
+    expect(screen.getAllByText(/第一夜/)).not.toHaveLength(0);
+    expect(screen.getAllByText(/红头盖/)).not.toHaveLength(0);
+    expect(screen.getByText('剧情回顾')).toBeInTheDocument();
+    expect(screen.getByText(/林晚在沈府喜房醒来/)).toBeInTheDocument();
+    expect(screen.getAllByText(/她在喜房里睁开眼。/)).not.toHaveLength(0);
+  });
+
+  it('shows a submitted book-travel action immediately and locks sending while it is processed', async () => {
+    const classification = createDeferred<{ classification: 'insert-beat' }>();
+    invokeMock.mockImplementation((command: string, args?: any) => {
+      if (command === 'classify_book_travel_input') return classification.promise;
+      if (command === 'start_write_book_travel_insert_beat_stream') {
+        return Promise.resolve({ runId: 'pending-insert-run' });
+      }
+      return defaultInvoke(command, args);
+    });
+    setActiveBookTravelScene();
+
+    renderWithRouter(<Story />);
+
+    const inputBox = screen.getByPlaceholderText(/说些什么/);
+    fireEvent.change(inputBox, { target: { value: '查看窗外动静' } });
+    const sendButton = document.querySelector('.de-ai-agent-run-button') as HTMLButtonElement;
+    fireEvent.click(sendButton);
+
+    expect(await screen.findByText('查看窗外动静')).toBeInTheDocument();
+
+    fireEvent.change(inputBox, { target: { value: '继续追问' } });
+    expect(sendButton).toBeDisabled();
+
+    classification.resolve({ classification: 'insert-beat' });
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('start_write_book_travel_insert_beat_stream', expect.anything());
+    });
+
+    fireEvent.change(inputBox, { target: { value: '继续追问' } });
+    expect(sendButton).toBeDisabled();
+
+    emitBookTravelEvent({
+      runId: 'pending-insert-run',
+      eventType: 'done',
+      message: JSON.stringify({
+        id: 'scene-1',
+        beat: { id: 'beat-2', content: '窗外有脚步声掠过。' },
+        volatileMemoryPatch: { lastAction: '查看窗外动静' },
+      }),
+    });
+
+    expect(await screen.findByText('窗外有脚步声掠过。')).toBeInTheDocument();
+    await waitFor(() => expect(sendButton).toBeEnabled());
+  });
+
+  it('shows new scene information after planning before the scene writer finishes', async () => {
+    const classification = createDeferred<{ classification: 'change-scene' }>();
+    invokeMock.mockImplementation((command: string, args?: any) => {
+      if (command === 'classify_book_travel_input') return classification.promise;
+      if (command === 'start_plan_book_travel_scene_stream') {
+        return Promise.resolve({ runId: 'planner-run' });
+      }
+      if (command === 'start_write_book_travel_change_scene_stream') {
+        return Promise.resolve({ runId: 'writer-run' });
+      }
+      return defaultInvoke(command, args);
+    });
+    setActiveBookTravelScene();
+
+    renderWithRouter(<Story />);
+
+    const inputBox = screen.getByPlaceholderText(/说些什么/);
+    fireEvent.change(inputBox, { target: { value: '去正厅见沈家人' } });
+    const sendButton = document.querySelector('.de-ai-agent-run-button') as HTMLButtonElement;
+    fireEvent.click(sendButton);
+
+    expect(await screen.findByText('去正厅见沈家人')).toBeInTheDocument();
+    expect(screen.getByText('正在识别行动...')).toBeInTheDocument();
+
+    classification.resolve({ classification: 'change-scene' });
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('start_plan_book_travel_scene_stream', expect.anything());
+    });
+    emitBookTravelEvent({
+      runId: 'planner-run',
+      eventType: 'done',
+      message: JSON.stringify({
+        id: 'scene-2',
+        title: '沈府正厅',
+        summary: '林晚转入沈家正厅，直面沈家人的试探。',
+        currentSituation: '正厅灯火通明，沈家长辈都在等她开口。',
+        time: '第一夜',
+        location: '沈府正厅',
+        activeCharacters: ['林晚', '沈霜', '沈夫人'],
+        stateChanges: { shenFamilyMood: '试探' },
+        divergence: '用户主动进入正厅',
+        storyProgress: 18,
+        endingStatus: 'active',
+        sceneGoals: ['稳住沈家人', '查清替嫁真相'],
+        entryBeatGuidance: '从推门入厅开始',
+        writerInstructions: '写正厅压迫感和第一轮试探',
+      }),
+    });
+
+    expect(await screen.findByText('沈府正厅')).toBeInTheDocument();
+    expect(screen.getByText(/地点：沈府正厅/)).toBeInTheDocument();
+    const situationCards = screen.getAllByTestId('scene-situation-card');
+    expect(situationCards[situationCards.length - 1]).toHaveTextContent('当前局势：正厅灯火通明，沈家长辈都在等她开口。');
+    expect(screen.queryByText('她推门走入正厅。')).not.toBeInTheDocument();
+    expect(await screen.findByText(/场景写手正在书写/)).toBeInTheDocument();
+
+    emitBookTravelEvent({
+      runId: 'writer-run',
+      eventType: 'done',
+      message: JSON.stringify({
+        beat: { id: 'beat-2', content: '她推门走入正厅。' },
+        volatileMemoryPatch: { shenFamilyMood: '试探' },
+      }),
+    });
+
+    expect(await screen.findByText('她推门走入正厅。')).toBeInTheDocument();
+    fireEvent.change(inputBox, { target: { value: '继续观察正厅' } });
+    await waitFor(() => expect(sendButton).toBeEnabled());
+  });
+
+  it('allows retrying only the scene writer when the planned scene writer output fails', async () => {
+    let writerRuns = 0;
+    invokeMock.mockImplementation((command: string, args?: any) => {
+      if (command === 'classify_book_travel_input') return Promise.resolve({ classification: 'change-scene' });
+      if (command === 'start_plan_book_travel_scene_stream') {
+        return Promise.resolve({ runId: 'retry-planner-run' });
+      }
+      if (command === 'start_write_book_travel_change_scene_stream') {
+        writerRuns += 1;
+        return Promise.resolve({ runId: `retry-writer-run-${writerRuns}` });
+      }
+      return defaultInvoke(command, args);
+    });
+    setActiveBookTravelScene();
+
+    renderWithRouter(<Story />);
+
+    fireEvent.change(screen.getByPlaceholderText(/说些什么/), { target: { value: '转去偏院搜证' } });
+    const sendButton = document.querySelector('.de-ai-agent-run-button') as HTMLButtonElement;
+    fireEvent.click(sendButton);
+
+    expect(await screen.findByText('转去偏院搜证')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('start_plan_book_travel_scene_stream', expect.anything());
+    });
+    emitBookTravelEvent({
+      runId: 'retry-planner-run',
+      eventType: 'done',
+      message: JSON.stringify({
+        id: 'scene-2',
+        title: '沈府偏院',
+        summary: '林晚避开正厅，从偏院寻找替嫁线索。',
+        currentSituation: '偏院无人掌灯，窗纸后有一截被撕碎的婚书。',
+        time: '第一夜深处',
+        location: '沈府偏院',
+        activeCharacters: ['林晚'],
+        stateChanges: { foundTrail: '偏院婚书碎片' },
+        divergence: '用户转入搜证线',
+        storyProgress: 21,
+        endingStatus: 'active',
+        sceneGoals: ['找到婚书碎片', '避开沈家巡夜人'],
+        entryBeatGuidance: '从推开偏院门写起',
+        writerInstructions: '写偏院冷清和婚书碎片的悬疑感',
+      }),
+    });
+
+    expect(await screen.findByText('沈府偏院')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(writerRuns).toBe(1);
+    });
+    emitBookTravelEvent({
+      runId: 'retry-writer-run-1',
+      eventType: 'done',
+      message: '不是 JSON',
+    });
+
+    const retryButton = await screen.findByRole('button', { name: /重试写手/ });
+    expect(screen.getByText(/写手生成失败/)).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText(/说些什么/), { target: { value: '先稳住呼吸' } });
+    await waitFor(() => expect(sendButton).toBeEnabled());
+
+    fireEvent.click(retryButton);
+    expect(sendButton).toBeDisabled();
+    await waitFor(() => {
+      expect(writerRuns).toBe(2);
+    });
+    emitBookTravelEvent({
+      runId: 'retry-writer-run-2',
+      eventType: 'done',
+      message: JSON.stringify({
+        beat: { id: 'beat-2', content: '她蹲下身，拾起那截被撕碎的婚书。' },
+        volatileMemoryPatch: { foundTrail: '偏院婚书碎片' },
+      }),
+    });
+
+    expect(await screen.findByText('她蹲下身，拾起那截被撕碎的婚书。')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /重试写手/ })).not.toBeInTheDocument();
+    expect(invokeMock.mock.calls.filter(([command]) => command === 'classify_book_travel_input')).toHaveLength(1);
+    expect(invokeMock.mock.calls.filter(([command]) => command === 'start_plan_book_travel_scene_stream')).toHaveLength(1);
+    await waitFor(() => expect(sendButton).toBeEnabled());
+  });
+
+  it('shows role identity and scene goals inside the current situation card when a new scene starts', () => {
+    setActiveBookTravelScene();
+    useBookTravelStore.setState({
+      turns: [{
+        id: 'turn-2',
+        userInput: '去正厅见沈家人',
+        classification: 'change-scene' as const,
+        plannerOutput: { sceneGoals: ['稳住沈家人', '查清替嫁真相'] },
+        narrativeOutput: '她推门走向正厅。',
+        stateSnapshot: { time: '第一夜', location: '沈府正厅' },
+        createdSceneId: 'scene-1',
+        createdBeatIds: ['beat-1'],
+      }],
+    });
+
+    renderWithRouter(<Story />);
+
+    const situationCard = screen.getByTestId('scene-situation-card');
+    expect(situationCard).toHaveTextContent('扮演身份：林晚（替嫁者）');
+    expect(situationCard).toHaveTextContent('场景目标：稳住沈家人、查清替嫁真相');
+    expect(situationCard).toHaveTextContent('当前局势：红烛未灭');
+    expect(screen.getByText('扮演身份：')).toHaveStyle({ color: '#d97757' });
+    expect(screen.getByText('场景目标：')).toHaveStyle({ color: '#d97757' });
+  });
+
+  it('uses the current scene title when saving book-travel progress', () => {
+    setActiveBookTravelScene();
+
+    renderWithRouter(<Story />);
+
+    fireEvent.click(screen.getByRole('button', { name: /保存进度/ }));
+
+    expect(useBookTravelStore.getState().savedProgresses[0]?.title).toBe('沈府婚宴');
+  });
+
+  it('classifies book-travel input only as beat insertion or scene change at zero temperature', async () => {
+    setActiveBookTravelScene();
+
+    renderWithRouter(<Story />);
+
+    fireEvent.change(screen.getByPlaceholderText(/说些什么/), { target: { value: '查看状态' } });
+    const sendButton = document.querySelector('.de-ai-agent-run-button') as HTMLButtonElement;
+    fireEvent.click(sendButton);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('classify_book_travel_input', expect.anything());
+    });
+    const classifyCall = invokeMock.mock.calls.find(([command]) => command === 'classify_book_travel_input');
+    expect(classifyCall?.[1].request.temperature).toBe(0);
+    expect(classifyCall?.[1].request.systemPrompt).toContain('insert-beat');
+    expect(classifyCall?.[1].request.systemPrompt).toContain('change-scene');
+    expect(classifyCall?.[1].request.systemPrompt).not.toContain('meta');
   });
 });

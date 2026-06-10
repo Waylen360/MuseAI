@@ -3,7 +3,6 @@
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashSet;
 use tauri::{AppHandle, Emitter, Manager};
 use crate::ActiveStreams;
 use crate::models::{BookTravelStreamStarted, BookTravelStreamEvent};
@@ -83,7 +82,6 @@ pub struct BookTravelEntrySetup {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum BookTravelInputClassification {
-    Meta,
     InsertBeat,
     ChangeScene,
 }
@@ -98,13 +96,19 @@ pub struct BookTravelInputClassificationResult {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BookTravelScenePlan {
+    pub id: String,
+    pub title: String,
+    pub summary: String,
+    pub current_situation: Option<String>,
+    pub time: Option<String>,
+    pub location: Option<String>,
+    pub active_characters: Vec<String>,
     pub state_changes: serde_json::Value,
     pub divergence: String,
     pub story_progress: u32,
     pub ending_status: Option<String>,
     pub scene_goals: Vec<String>,
     pub entry_beat_guidance: String,
-    pub allowed_cast: Vec<String>,
     pub writer_instructions: String,
 }
 
@@ -125,6 +129,14 @@ pub struct BookTravelScene {
     pub time: Option<String>,
     pub location: Option<String>,
     pub active_characters: Vec<String>,
+    pub beat: BookTravelBeat,
+    pub stable_memory_patch: Option<serde_json::Value>,
+    pub volatile_memory_patch: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BookTravelWriterOutput {
     pub beat: BookTravelBeat,
     pub stable_memory_patch: Option<serde_json::Value>,
     pub volatile_memory_patch: Option<serde_json::Value>,
@@ -271,7 +283,7 @@ pub fn build_scene_writer_call(
             user_input.trim()
         ),
         "change-scene" => format!(
-            "写作流程：change-scene。本轮生成一个新场景，包含完整的场景信息（id、title、summary、currentSituation、time、location、activeCharacters），beat 字段为单个入口节拍对象。不要预写后续步骤。\n用户输入：{}",
+            "写作流程：change-scene。剧情规划师已经给出新场景信息，本轮只输出 1 个入口节拍，beat 字段为单个对象。不要输出 id、title、summary、currentSituation、time、location、activeCharacters，也不要预写后续步骤。\n用户输入：{}",
             user_input.trim()
         ),
         _ => return Err("未知的穿书写作流程".to_string()),
@@ -285,6 +297,7 @@ pub fn build_scene_writer_call(
         "summaryMemory": writer_request.state.get("summaryMemory").cloned().unwrap_or(Value::Null),
         "recentScenes": writer_request.state.get("recentScenes").cloned().unwrap_or(Value::Null),
         "recentTurns": writer_request.state.get("recentTurns").cloned().unwrap_or(Value::Null),
+        "plannedScene": writer_request.state.get("plannedScene").cloned().unwrap_or(Value::Null),
         "writerInstructions": writer_request.state.get("writerInstructions").cloned().unwrap_or(Value::Null),
     });
     writer_request.materials = None;
@@ -307,10 +320,10 @@ fn build_user_prompt(
         BookTravelRole::MaterialAssembler => "",
         BookTravelRole::EntryDirector => "",
         BookTravelRole::InputClassifier => {
-            "请输出严格 JSON，字段为 classification 与 reason。classification 只能是 meta、insert-beat、change-scene。"
+            "请输出严格 JSON，字段为 classification 与 reason。classification 只能是 insert-beat 或 change-scene。"
         }
         BookTravelRole::ScenePlanner => {
-            "规划前检查世界规则、用户资源、已知信息、当前时间与地点。"
+            "规划前检查世界规则、用户资源、已知信息、当前时间与地点。请输出严格 JSON，字段包含 id、title、summary、currentSituation、time、location、activeCharacters、stateChanges、divergence、storyProgress、endingStatus、sceneGoals、entryBeatGuidance、writerInstructions；stateChanges 不要包含 time 或 location。"
         }
         BookTravelRole::SceneWriter => "",
         BookTravelRole::MemoryKeeper => {
@@ -372,8 +385,8 @@ fn default_temperature(role: BookTravelRole) -> f32 {
     match role {
         BookTravelRole::MaterialAssembler => 0.0,
         BookTravelRole::EntryDirector => 0.6,
-        BookTravelRole::InputClassifier
-        | BookTravelRole::ScenePlanner
+        BookTravelRole::InputClassifier => 0.0,
+        BookTravelRole::ScenePlanner
         | BookTravelRole::MemoryKeeper => 0.2,
         BookTravelRole::SceneWriter => 0.8,
         BookTravelRole::EndingJudge => 0.3,
@@ -1087,11 +1100,19 @@ pub fn parse_and_repair_writer_scene(
     repair_scene_graph(scene)
 }
 
+pub fn parse_and_repair_writer_output(
+    raw: &str,
+    previous_valid_state: Value,
+) -> Result<BookTravelWriterOutput, String> {
+    let output = parse_book_travel_json::<BookTravelWriterOutput>(raw, previous_valid_state)?;
+    repair_writer_output(output)
+}
+
 async fn run_scene_writer(
     request: BookTravelStructuredRequest,
     flow: &str,
     user_input: &str,
-) -> Result<BookTravelScene, String> {
+) -> Result<BookTravelWriterOutput, String> {
     if request.api_key.trim().is_empty() {
         return Err("请先配置穿书模型 API Key".to_string());
     }
@@ -1099,14 +1120,14 @@ async fn run_scene_writer(
     let writer_request = request_for_role(request, BookTravelRole::SceneWriter);
     let client = reqwest::Client::new();
     let raw = call_structured_llm(&client, &writer_request, &call).await?;
-    parse_and_repair_writer_scene(&raw, writer_request.previous_valid_state)
+    parse_and_repair_writer_output(&raw, writer_request.previous_valid_state)
 }
 
 #[tauri::command]
 pub async fn write_book_travel_insert_beat(
     request: BookTravelStructuredRequest,
     user_input: String,
-) -> Result<BookTravelScene, String> {
+) -> Result<BookTravelWriterOutput, String> {
     run_scene_writer(request, "insert-beat", &user_input).await
 }
 
@@ -1114,13 +1135,18 @@ pub async fn write_book_travel_insert_beat(
 pub async fn write_book_travel_change_scene(
     request: BookTravelStructuredRequest,
     user_input: String,
-) -> Result<BookTravelScene, String> {
+) -> Result<BookTravelWriterOutput, String> {
     run_scene_writer(request, "change-scene", &user_input).await
 }
 
 pub fn repair_scene_graph(mut scene: BookTravelScene) -> Result<BookTravelScene, String> {
     scene.stable_memory_patch = None;
     Ok(scene)
+}
+
+pub fn repair_writer_output(mut output: BookTravelWriterOutput) -> Result<BookTravelWriterOutput, String> {
+    output.stable_memory_patch = None;
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -1248,11 +1274,11 @@ mod tests {
     }
 
     #[test]
-    fn plot_planner_prompts_cover_classification_and_scene_planning() {
+    fn input_classifier_prompts_only_cover_scene_flow_options() {
         let classify_request = sample_request(
             BookTravelRole::InputClassifier,
             "剧情规划系统提示词",
-            0.2,
+            0.0,
             2048,
             Some(64000),
             None,
@@ -1260,26 +1286,47 @@ mod tests {
         let classify_call = build_structured_call(&classify_request, "我要问沈霜一句话")
             .expect("classification call should build");
         assert_eq!(classify_call.role, BookTravelRole::InputClassifier);
-        assert!(classify_call.user_prompt.contains("meta"));
         assert!(classify_call.user_prompt.contains("insert-beat"));
         assert!(classify_call.user_prompt.contains("change-scene"));
+        assert!(!classify_call.user_prompt.contains("meta"));
+        assert_eq!(default_temperature(BookTravelRole::InputClassifier), 0.0);
 
-        let plan_request = sample_request(
-            BookTravelRole::ScenePlanner,
-            "剧情规划系统提示词",
-            0.2,
-            8192,
-            Some(64000),
-            None,
-        );
-        let plan_call = build_structured_call(&plan_request, "我离开客栈去找反派")
-            .expect("scene plan call should build");
-        assert_eq!(plan_call.role, BookTravelRole::ScenePlanner);
-        assert!(plan_call.user_prompt.contains("stateChanges"));
-        assert!(plan_call.user_prompt.contains("divergence"));
-        assert!(plan_call.user_prompt.contains("storyProgress"));
-        assert!(plan_call.user_prompt.contains("allowedCast"));
-        assert!(plan_call.user_prompt.contains("writerInstructions"));
+    }
+
+    #[test]
+    fn scene_plan_owns_new_scene_metadata_without_allowed_cast() {
+        let raw_plan = r#"{
+            "id":"scene-2",
+            "title":"沈府正厅",
+            "summary":"林晚转入正厅，直面沈家人的试探",
+            "currentSituation":"正厅灯火通明，沈家长辈都在等她开口",
+            "time":"第一夜",
+            "location":"沈府正厅",
+            "activeCharacters":["林晚","沈霜"],
+            "stateChanges":{"shenFamilyMood":"试探"},
+            "divergence":"用户主动进入正厅",
+            "storyProgress":18,
+            "endingStatus":"active",
+            "sceneGoals":["稳住沈家人","查清替嫁真相"],
+            "entryBeatGuidance":"从推门入厅开始",
+            "writerInstructions":"写正厅压迫感和第一轮试探"
+        }"#;
+
+        let plan = parse_book_travel_json::<BookTravelScenePlan>(
+            raw_plan,
+            serde_json::json!({}),
+        )
+        .expect("new scene plan should parse");
+        let serialized = serde_json::to_value(&plan).expect("plan should serialize");
+
+        assert_eq!(plan.id, "scene-2");
+        assert_eq!(plan.title, "沈府正厅");
+        assert_eq!(plan.time.as_deref(), Some("第一夜"));
+        assert_eq!(plan.location.as_deref(), Some("沈府正厅"));
+        assert_eq!(plan.active_characters, vec!["林晚".to_string(), "沈霜".to_string()]);
+        assert!(plan.state_changes.get("time").is_none());
+        assert!(plan.state_changes.get("location").is_none());
+        assert!(serialized.get("allowedCast").is_none());
     }
 
     #[test]
@@ -1392,15 +1439,28 @@ mod tests {
     }
 
     #[test]
-    fn writer_scene_output_is_repaired_before_persisting() {
-        let raw_scene = r#"{
-            "id":"scene-1",
-            "title":"破碎新场景",
-            "summary":"主角离开客栈",
-            "currentSituation":"门外有雨",
-            "time":"夜",
-            "location":"客栈外",
-            "activeCharacters":["我","沈霜"],
+    fn scene_writer_change_scene_prompt_does_not_request_scene_metadata() {
+        let request = sample_request(
+            BookTravelRole::SceneWriter,
+            "场景写手系统提示词",
+            0.8,
+            8192,
+            Some(64000),
+            Some("off"),
+        );
+
+        let call = build_scene_writer_call(&request, "change-scene", "进入正厅")
+            .expect("scene writer call should build");
+
+        assert!(call.user_prompt.contains("change-scene"));
+        assert!(call.user_prompt.contains("只输出 1 个入口节拍"));
+        assert!(!call.user_prompt.contains("完整的场景信息"));
+        assert!(call.user_prompt.contains("不要输出 id、title、summary"));
+    }
+
+    #[test]
+    fn writer_output_is_repaired_before_persisting() {
+        let raw_output = r#"{
             "beat":{
                 "id":"beat-1",
                 "content":"她压低声音。"
@@ -1409,15 +1469,16 @@ mod tests {
             "volatileMemoryPatch":{"clues":["雨夜玉佩"]}
         }"#;
 
-        let scene = parse_and_repair_writer_scene(
-            raw_scene,
+        let output = parse_and_repair_writer_output(
+            raw_output,
             serde_json::json!({}),
         )
-        .expect("writer scene should be repaired");
+        .expect("writer output should be repaired");
 
-        assert_eq!(scene.stable_memory_patch, None);
+        assert_eq!(output.beat.content, "她压低声音。");
+        assert_eq!(output.stable_memory_patch, None);
         assert_eq!(
-            scene.volatile_memory_patch,
+            output.volatile_memory_patch,
             Some(serde_json::json!({"clues": ["雨夜玉佩"]}))
         );
     }

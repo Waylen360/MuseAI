@@ -9,6 +9,7 @@ import {
   DeleteOutlined,
   UserOutlined,
   FileProtectOutlined,
+  ProfileOutlined,
   CommentOutlined,
   ExperimentOutlined,
   BranchesOutlined
@@ -22,7 +23,7 @@ import { useSettingsStore } from '../stores/useSettingsStore';
 import { usePartnerStore } from '../stores/usePartnerStore';
 import { useStoryStore } from '../stores/useStoryStore';
 import { usePartnerChatStore } from '../stores/usePartnerChatStore';
-import { useBookTravelStore } from '../stores/useBookTravelStore';
+import { useBookTravelStore, type BookTravelBeat, type BookTravelScene, type BookTravelTurnSnapshot } from '../stores/useBookTravelStore';
 import { Message, AgentSessionSummary, SessionContextCompaction, AgentToolEntry } from '../stores/useAgentStore';
 import {
   buildStoryModelMessages,
@@ -115,6 +116,140 @@ const cleanAndParseJSON = (rawStr: unknown): any => {
   return JSON.parse(jsonStr);
 };
 
+const getPlannerSceneGoals = (plannerOutput: unknown): string[] => {
+  if (!plannerOutput || typeof plannerOutput !== 'object') return [];
+  const rawGoals = (plannerOutput as any).sceneGoals || (plannerOutput as any).scene_goals;
+  if (Array.isArray(rawGoals)) {
+    const goals: string[] = [];
+    for (const goal of rawGoals) {
+      const text = String(goal).trim();
+      if (text) goals.push(text);
+    }
+    return goals;
+  }
+  if (typeof rawGoals === 'string' && rawGoals.trim()) {
+    return [rawGoals.trim()];
+  }
+  return [];
+};
+
+const readPlanText = (plan: any, camelKey: string, snakeKey?: string): string => {
+  const value = plan?.[camelKey] ?? (snakeKey ? plan?.[snakeKey] : undefined);
+  return typeof value === 'string' ? value.trim() : '';
+};
+
+const readPlanStringArray = (plan: any, camelKey: string, snakeKey?: string): string[] => {
+  const value = plan?.[camelKey] ?? (snakeKey ? plan?.[snakeKey] : undefined);
+  if (!Array.isArray(value)) return [];
+  const items: string[] = [];
+  for (const item of value) {
+    const text = String(item).trim();
+    if (text) items.push(text);
+  }
+  return items;
+};
+
+const getPlanStateChanges = (plan: any): Record<string, unknown> => {
+  const stateChanges = plan?.stateChanges ?? plan?.state_changes;
+  return stateChanges && typeof stateChanges === 'object' && !Array.isArray(stateChanges)
+    ? stateChanges
+    : {};
+};
+
+const buildCurrentStateFromPlan = (
+  baseState: unknown,
+  plan: any,
+  fallbackTime = '',
+  fallbackLocation = '',
+) => {
+  const stateChanges = getPlanStateChanges(plan);
+  const { time: stateTime, location: stateLocation, ...restStateChanges } = stateChanges as Record<string, unknown>;
+  const base = baseState && typeof baseState === 'object' ? baseState as Record<string, unknown> : {};
+  return {
+    ...base,
+    ...restStateChanges,
+    time: readPlanText(plan, 'time') || String(stateTime || fallbackTime || base.time || ''),
+    location: readPlanText(plan, 'location') || String(stateLocation || fallbackLocation || base.location || ''),
+  };
+};
+
+const buildSceneFromPlan = (
+  plan: any,
+  fallback: {
+    title: string;
+    summary?: string;
+    currentSituation?: string;
+    time?: string;
+    location?: string;
+    index: number;
+  },
+): BookTravelScene => {
+  const stateChanges = getPlanStateChanges(plan);
+  return {
+    id: readPlanText(plan, 'id') || `scene-${Date.now()}`,
+    title: readPlanText(plan, 'title') || fallback.title || `新场景-${fallback.index}`,
+    summary: readPlanText(plan, 'summary') || fallback.summary || '',
+    currentSituation: readPlanText(plan, 'currentSituation', 'current_situation') || fallback.currentSituation || '',
+    time: readPlanText(plan, 'time') || String(stateChanges.time || fallback.time || ''),
+    location: readPlanText(plan, 'location') || String(stateChanges.location || fallback.location || ''),
+    activeCharacters: readPlanStringArray(plan, 'activeCharacters', 'active_characters').length > 0
+      ? readPlanStringArray(plan, 'activeCharacters', 'active_characters')
+      : readPlanStringArray(plan, 'allowedCast', 'allowed_cast'),
+    beats: [],
+  };
+};
+
+const extractWriterBeat = (writerOutput: any): BookTravelBeat | null => {
+  const rawBeat = writerOutput?.beat;
+  if (!rawBeat || typeof rawBeat !== 'object' || !String(rawBeat.content || '').trim()) {
+    return null;
+  }
+  return {
+    id: String(rawBeat.id || `beat-${Date.now()}`),
+    content: String(rawBeat.content || ''),
+  };
+};
+
+const appendWriterBeatToCurrentScene = (writerOutput: any): BookTravelBeat => {
+  const store = useBookTravelStore.getState();
+  const currentScene = store.scenes.find((s) => s.id === store.currentSceneId);
+  if (!currentScene) throw new Error('当前场景不存在');
+  const newBeat = extractWriterBeat(writerOutput);
+  if (!newBeat) throw new Error('场景写手没有返回有效 beat');
+  const existingIds = new Set(currentScene.beats.map((b) => b.id));
+  const beatId = existingIds.has(newBeat.id) ? `beat-${Date.now()}` : newBeat.id;
+  const beat = {
+    id: beatId,
+    content: newBeat.content,
+  };
+  store.addBeatToCurrentScene(beat);
+  store.setCurrentBeatId(beatId);
+  const patch = writerOutput.volatileMemoryPatch || writerOutput.volatile_memory_patch;
+  if (patch && typeof patch === 'object') {
+    store.updateVolatileMemory(patch);
+  }
+  return beat;
+};
+
+const formatElapsed = (ms: number) => {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+};
+
+const extractPartialContent = (jsonStr: string): string | null => {
+  const match = jsonStr.match(/"content"\s*:\s*"([^"]*)/);
+  return match ? match[1] : null;
+};
+
+const savedProgressDateFormatter = new Intl.DateTimeFormat('zh-CN', {
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
 const Story: React.FC = () => {
   const {
     messages, setMessages,
@@ -138,6 +273,7 @@ const Story: React.FC = () => {
 
   // Book-travel stream states
   const [, setIsTransitioningScene] = useState(false);
+  const [isBookTravelSubmitting, setIsBookTravelSubmitting] = useState(false);
   const [startProgressPhase, setStartProgressPhase] = useState<'planner' | 'writer' | 'done' | 'error' | 'cancelled'>('done');
   const [plannerOutput, setPlannerOutput] = useState('');
   const [writerOutput, setWriterOutput] = useState('');
@@ -147,19 +283,6 @@ const Story: React.FC = () => {
   const startRunIdRef = useRef<string | null>(null);
   const startResolverRef = useRef<{ resolve: (content: string) => void; reject: (error: string) => void } | null>(null);
   const startCancelledRef = useRef(false);
-
-  const formatElapsed = (ms: number) => {
-    const totalSeconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-  };
-
-  const extractPartialContent = (jsonStr: string): string | null => {
-    // Try to extract the content value from a potentially incomplete JSON string
-    const match = jsonStr.match(/"content"\s*:\s*"([^"]*)/);
-    return match ? match[1] : null;
-  };
 
   const buildBookTravelRequest = (
     role: string,
@@ -466,44 +589,48 @@ const Story: React.FC = () => {
     maxContextTokens: 200000,
     thinkingDepth: 'off',
   };
+  const isActiveBookTravelScene = bookTravelStore.scenes.length > 0;
+  const isBookTravelBusy = isActiveBookTravelScene && (
+    isBookTravelSubmitting ||
+    startProgressPhase === 'planner' ||
+    startProgressPhase === 'writer'
+  );
+  const currentBookTravelScene = bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId);
+  const currentBookTravelSceneTitle = currentBookTravelScene?.title?.trim();
 
-
-  const mergeNewBeatIntoCurrentScene = (updatedScene: any) => {
-    const currentScene = bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId);
-    if (!currentScene) return;
-    const newBeat = updatedScene.beat;
-    if (newBeat && newBeat.content) {
-      const existingIds = new Set(currentScene.beats.map((b) => b.id));
-      const beatId = existingIds.has(newBeat.id) ? `beat-${Date.now()}` : (newBeat.id || `beat-${Date.now()}`);
-      bookTravelStore.addBeatToCurrentScene({
-        id: beatId,
-        content: newBeat.content || '',
+  const restartBookTravelAdventure = () => {
+    startCancelledRef.current = true;
+    if (startRunIdRef.current) {
+      void invoke('stop_book_travel_stream', { runId: startRunIdRef.current }).catch((error) => {
+        console.error('停止穿书流失败:', error);
       });
-      bookTravelStore.setCurrentBeatId(beatId);
     }
-    const patch = updatedScene.volatileMemoryPatch || updatedScene.volatile_memory_patch;
-    if (patch && typeof patch === 'object') {
-      bookTravelStore.updateVolatileMemory(patch);
-    }
+    createNewSession();
+    useBookTravelStore.getState().resetSession();
+    setIsTransitioningScene(false);
+    setIsBookTravelSubmitting(false);
+    setStartProgressOpen(false);
+    setStartProgressPhase('done');
+    setPlannerOutput('');
+    setWriterOutput('');
+    setStartProgressError('');
+    setStartElapsedMs(0);
+    startRunIdRef.current = null;
+    startResolverRef.current = null;
   };
 
-  const handleMetaCommand = async (userInput: string) => {
-    const lower = userInput.toLowerCase();
-    if (['存档', '保存', 'save'].some((t) => lower.includes(t))) {
-      try {
-        await saveCurrentSession();
-        message.success('已存档');
-      } catch (e) {
-        message.error(`存档失败：${String(e)}`);
-      }
-      return;
-    }
-    if (['查看状态', '我的状态', '状态', '背包', '当前情况'].some((t) => lower.includes(t))) {
-      Modal.info({
-        title: '当前状态',
-        width: 520,
-        content: (
-          <div style={{ lineHeight: 1.8, color: '#33312e' }}>
+
+  const showBookTravelStatusModal = () => {
+    const currentScene = bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId);
+    const summary = bookTravelStore.summaryMemory;
+    const turns = bookTravelStore.turns;
+    Modal.info({
+      title: '穿书状态',
+      width: 680,
+      content: (
+        <div style={{ lineHeight: 1.8, color: '#33312e', maxHeight: 520, overflowY: 'auto' }}>
+          <section style={{ marginBottom: 18 }}>
+            <div style={{ fontWeight: 600, marginBottom: 8 }}>当前状态</div>
             {bookTravelStore.userCharacter && (
               <div>
                 <strong>扮演身份：</strong>
@@ -512,8 +639,8 @@ const Story: React.FC = () => {
               </div>
             )}
             <div style={{ marginTop: 8 }}>
-              <strong>时间：</strong>{String((bookTravelStore.currentState as any)?.time || bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId)?.time || '未知')}
-              <br /><strong>地点：</strong>{String((bookTravelStore.currentState as any)?.location || bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId)?.location || '未知')}
+              <strong>时间：</strong>{String((bookTravelStore.currentState as any)?.time || currentScene?.time || '未知')}
+              <br /><strong>地点：</strong>{String((bookTravelStore.currentState as any)?.location || currentScene?.location || '未知')}
             </div>
             {bookTravelStore.volatileMemory && (
               <div style={{ marginTop: 8 }}>
@@ -522,21 +649,12 @@ const Story: React.FC = () => {
                 ))}
               </div>
             )}
-          </div>
-        ),
-      });
-      return;
-    }
-    if (['回顾剧情', '剧情回顾', '之前发生了什么'].some((t) => lower.includes(t))) {
-      const summary = bookTravelStore.summaryMemory;
-      const turns = bookTravelStore.turns;
-      Modal.info({
-        title: '剧情回顾',
-        width: 600,
-        content: (
-          <div style={{ lineHeight: 1.8, color: '#33312e', maxHeight: 480, overflowY: 'auto' }}>
+          </section>
+
+          <section>
+            <div style={{ fontWeight: 600, marginBottom: 8 }}>剧情回顾</div>
             {summary ? (
-              <div style={{ marginBottom: 16, padding: 12, background: '#faf9f5', borderRadius: 8 }}>
+              <div style={{ marginBottom: 12, padding: 12, background: '#faf9f5', borderRadius: 8 }}>
                 <strong>剧情摘要：</strong>
                 <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{String(summary)}</div>
               </div>
@@ -546,7 +664,7 @@ const Story: React.FC = () => {
                 <strong>近期回合：</strong>
                 {turns.slice(-5).map((turn, idx) => (
                   <div key={turn.id} style={{ marginTop: 8, padding: 8, background: '#faf9f5', borderRadius: 6 }}>
-                    <div style={{ fontSize: 12, color: '#8c8882', marginBottom: 4 }}>回合 {turns.length - 5 + idx + 1}</div>
+                    <div style={{ fontSize: 12, color: '#8c8882', marginBottom: 4 }}>回合 {Math.max(1, turns.length - 5 + idx + 1)}</div>
                     <div><strong>你：</strong>{turn.userInput}</div>
                     <div style={{ marginTop: 4 }}><strong>剧情：</strong>{turn.narrativeOutput}</div>
                   </div>
@@ -555,56 +673,105 @@ const Story: React.FC = () => {
             ) : (
               <div style={{ color: '#8c8882' }}>暂无剧情记录</div>
             )}
-          </div>
-        ),
-      });
-      return;
-    }
-    if (['结束游戏', '结束穿书', '退出穿书', 'game over'].some((t) => lower.includes(t))) {
-      Modal.confirm({
-        title: '结束穿书',
-        content: '确定要结束当前穿书冒险并触发结局判定吗？',
-        onOk: async () => {
-          try {
-            const { selectedOutline, selectedWorldBook, selectedCharacterCards, stableMemory, volatileMemory, assembledWorldModel, scenes, turns } = bookTravelStore;
-            if (!selectedOutline || !selectedWorldBook) {
-              message.error('素材缺失');
-              return;
-            }
-            const materials = {
-              outline: { id: selectedOutline.id, title: selectedOutline.title, content: selectedOutline.content },
-              worldBook: { id: selectedWorldBook.id, title: selectedWorldBook.title, content: selectedWorldBook.content },
-              characterCards: selectedCharacterCards.map((cc: any) => ({ id: cc.id, title: cc.title, content: cc.content })),
-            };
-            const judgeConfig = settings.agentConfigs?.bookTravelEndingJudge || {};
-            const judgeState = { stableMemory, volatileMemory, assembledWorldModel, currentState: bookTravelStore.currentState, summaryMemory: bookTravelStore.summaryMemory || '', recentScenes: scenes.slice(-3), recentTurns: turns.slice(-5) };
-            const judgeRequest = buildBookTravelRequest('ending-judge', settings.bookTravelEndingJudgePrompt, judgeConfig, materials, judgeState);
-            const endingJsonStr = await invoke<string>('judge_book_travel_ending', { request: judgeRequest });
-            let ending = cleanAndParseJSON(endingJsonStr);
-            bookTravelStore.finishSession(ending);
-            message.success('已达成穿书结局！');
-          } catch (err: any) {
-            message.error(`结局判定失败：${String(err)}`);
-          }
-        },
-      });
-      return;
-    }
-    if (['重试', '重来', '撤销', '回退', 'undo'].some((t) => lower.includes(t))) {
-      const turns = bookTravelStore.turns;
-      if (turns.length === 0) {
-        message.info('没有可回退的回合');
-        return;
-      }
-      bookTravelStore.removeLastTurn();
-      bookTravelStore.removeLastBeatFromCurrentScene();
-      message.success('已回退到上一回合');
-      return;
-    }
-    message.info('元指令已接收');
+          </section>
+        </div>
+      ),
+    });
   };
 
-  const handleInsertBeatStream = async (userInput: string) => {
+  const runChangeSceneWriterForPlan = async ({
+    userInput,
+    plan,
+    plannedScene,
+    currentState,
+    turnId,
+    materials,
+    stableMemory,
+    volatileMemory,
+    assembledWorldModel,
+    recentScenes,
+    recentTurns,
+  }: {
+    userInput: string;
+    plan: any;
+    plannedScene: BookTravelScene;
+    currentState: unknown;
+    turnId?: string;
+    materials: any;
+    stableMemory: unknown;
+    volatileMemory: unknown;
+    assembledWorldModel: unknown;
+    recentScenes: BookTravelScene[];
+    recentTurns: BookTravelTurnSnapshot[];
+  }) => {
+    const writerInstructions = readPlanText(plan, 'writerInstructions', 'writer_instructions') || userInput;
+    const writerConfig = settings.agentConfigs?.bookTravelSceneWriter || {};
+    const writerState = {
+      stableMemory,
+      volatileMemory,
+      assembledWorldModel,
+      currentState,
+      summaryMemory: useBookTravelStore.getState().summaryMemory || '',
+      recentScenes,
+      recentTurns,
+      plannedScene,
+      writerInstructions,
+    };
+    const writerRequest = buildBookTravelRequest('scene-writer', settings.bookTravelSceneWriterPrompt, writerConfig, materials, writerState);
+    const writerOutputStr = await runBookTravelStreamTask(
+      'start_write_book_travel_change_scene_stream',
+      writerRequest,
+      { userInput: writerInstructions, allowedSpeakers: plannedScene.activeCharacters || [] },
+    );
+    const writerOutput = cleanAndParseJSON(writerOutputStr);
+    const newBeat = appendWriterBeatToCurrentScene(writerOutput);
+    const store = useBookTravelStore.getState();
+    const completedScene = store.scenes.find((scene) => scene.id === plannedScene.id) || {
+      ...plannedScene,
+      beats: [newBeat],
+    };
+    const turnPatch = {
+      classification: 'change-scene' as const,
+      status: 'done' as const,
+      failedStage: undefined,
+      plannerOutput: plan,
+      narrativeOutput: newBeat.content,
+      stateSnapshot: currentState,
+      createdSceneId: plannedScene.id,
+      createdBeatIds: [newBeat.id],
+    };
+    const newTurn = { id: turnId || `turn-${Date.now()}`, userInput, ...turnPatch };
+    if (turnId) {
+      store.updateTurn(turnId, turnPatch);
+    } else {
+      store.appendTurn(newTurn);
+    }
+
+    const latestState = useBookTravelStore.getState();
+    const recentTurnsWithoutCurrent = latestState.turns.filter((turn) => turn.id !== newTurn.id);
+    const endingStatus = readPlanText(plan, 'endingStatus', 'ending_status');
+    if (endingStatus && endingStatus !== 'none' && endingStatus !== 'active') {
+      const judgeConfig = settings.agentConfigs?.bookTravelEndingJudge || {};
+      const judgeState = { stableMemory, volatileMemory, assembledWorldModel, currentState, summaryMemory: latestState.summaryMemory || '', recentScenes: [...recentScenes.slice(-3), completedScene], recentTurns: [...recentTurnsWithoutCurrent.slice(-5), newTurn] };
+      const judgeRequest = buildBookTravelRequest('ending-judge', settings.bookTravelEndingJudgePrompt, judgeConfig, materials, judgeState);
+      const endingJsonStr = await invoke<string>('judge_book_travel_ending', { request: judgeRequest });
+      const ending = cleanAndParseJSON(endingJsonStr);
+      useBookTravelStore.getState().finishSession(ending);
+      message.success('已达成穿书结局！');
+    } else {
+      const keeperConfig = settings.agentConfigs?.bookTravelMemoryKeeper || {};
+      const keeperState = { stableMemory, volatileMemory, assembledWorldModel, currentState, summaryMemory: latestState.summaryMemory || '', recentScenes: [...recentScenes.slice(-3), completedScene], recentTurns: [...recentTurnsWithoutCurrent.slice(-5), newTurn] };
+      const keeperRequest = buildBookTravelRequest('memory-keeper', settings.bookTravelMemoryKeeperPrompt, keeperConfig, materials, keeperState);
+      invoke<string>('summarize_book_travel_memory', { request: keeperRequest }).then((resStr) => {
+        try { const res = cleanAndParseJSON(resStr); if (res.summary) useBookTravelStore.getState().updateSummaryMemory(res.summary); }
+        catch (e) { console.error('Failed to parse memory keeper summary:', e); }
+      }).catch((err) => { console.error('Failed to update memory keeper:', err); });
+    }
+
+    return newTurn;
+  };
+
+  const handleInsertBeatStream = async (userInput: string, turnId?: string) => {
     setIsTransitioningScene(true);
     setStartProgressPhase('writer');
     setWriterOutput('');
@@ -614,7 +781,7 @@ const Story: React.FC = () => {
     let elapsedInterval: ReturnType<typeof setInterval> | null = null;
     try {
       elapsedInterval = setInterval(() => setStartElapsedMs((p) => p + 100), 100);
-      const { selectedOutline, selectedWorldBook, selectedCharacterCards, stableMemory, volatileMemory, assembledWorldModel, scenes, turns } = bookTravelStore;
+      const { selectedOutline, selectedWorldBook, selectedCharacterCards, stableMemory, volatileMemory, assembledWorldModel, scenes, turns } = useBookTravelStore.getState();
       if (!selectedOutline || !selectedWorldBook) throw new Error('素材缺失');
       const materials = {
         outline: { id: selectedOutline.id, title: selectedOutline.title, content: selectedOutline.content },
@@ -627,14 +794,49 @@ const Story: React.FC = () => {
       const currentScene = scenes.find((s) => s.id === bookTravelStore.currentSceneId);
       const allowedSpeakers = currentScene?.activeCharacters || [];
       const sceneJsonStr = await runBookTravelStreamTask('start_write_book_travel_insert_beat_stream', writerRequest, { userInput, allowedSpeakers });
-      let scene = cleanAndParseJSON(sceneJsonStr);
-      mergeNewBeatIntoCurrentScene(scene);
-      const newBeat = scene.beat;
-      bookTravelStore.appendTurn({ id: `turn-${Date.now()}`, userInput, classification: 'insert-beat' as const, narrativeOutput: newBeat?.content || '', stateSnapshot: bookTravelStore.currentState, createdBeatIds: [newBeat?.id || ''] });
+      const writerOutput = cleanAndParseJSON(sceneJsonStr);
+      const newBeat = appendWriterBeatToCurrentScene(writerOutput);
+      const turnPatch = {
+        classification: 'insert-beat' as const,
+        status: 'done' as const,
+        failedStage: undefined,
+        narrativeOutput: newBeat?.content || '',
+        stateSnapshot: useBookTravelStore.getState().currentState,
+        createdBeatIds: [newBeat?.id || ''].filter(Boolean),
+      };
+      if (turnId) {
+        useBookTravelStore.getState().updateTurn(turnId, turnPatch);
+      } else {
+        bookTravelStore.appendTurn({ id: `turn-${Date.now()}`, userInput, ...turnPatch });
+      }
       setStartProgressPhase('done');
     } catch (err: any) {
-      if (startCancelledRef.current) { message.info('已中断'); setStartProgressPhase('cancelled'); }
-      else { const errorMsg = String(err); message.error(`生成失败：${errorMsg}`); setStartProgressError(errorMsg); setStartProgressPhase('error'); }
+      if (startCancelledRef.current) {
+        message.info('已中断');
+        if (turnId) {
+          useBookTravelStore.getState().updateTurn(turnId, {
+            classification: 'insert-beat',
+            status: 'error',
+            failedStage: undefined,
+            narrativeOutput: '已中断生成',
+          });
+        }
+        setStartProgressPhase('cancelled');
+      }
+      else {
+        const errorMsg = String(err);
+        message.error(`生成失败：${errorMsg}`);
+        if (turnId) {
+          useBookTravelStore.getState().updateTurn(turnId, {
+            classification: 'insert-beat',
+            status: 'error',
+            failedStage: 'writing',
+            narrativeOutput: `写手生成失败：${errorMsg}`,
+          });
+        }
+        setStartProgressError(errorMsg);
+        setStartProgressPhase('error');
+      }
     } finally {
       if (elapsedInterval) clearInterval(elapsedInterval);
       setIsTransitioningScene(false);
@@ -643,7 +845,7 @@ const Story: React.FC = () => {
     }
   };
 
-  const handleChangeSceneStream = async (userInput: string) => {
+  const handleChangeSceneStream = async (userInput: string, turnId?: string) => {
     setIsTransitioningScene(true);
     setStartProgressOpen(true);
     setStartProgressPhase('planner');
@@ -652,9 +854,13 @@ const Story: React.FC = () => {
     setStartElapsedMs(0);
     startCancelledRef.current = false;
     let elapsedInterval: ReturnType<typeof setInterval> | null = null;
+    let failedStage: 'planning' | 'writing' = 'planning';
+    let plan: any = null;
+    let plannedScene: BookTravelScene | null = null;
+    let newCurrentState: unknown = null;
     try {
       elapsedInterval = setInterval(() => setStartElapsedMs((p) => p + 100), 100);
-      const { selectedOutline, selectedWorldBook, selectedCharacterCards, stableMemory, volatileMemory, assembledWorldModel, scenes, turns, userCharacter } = bookTravelStore;
+      const { selectedOutline, selectedWorldBook, selectedCharacterCards, stableMemory, volatileMemory, assembledWorldModel, scenes, turns, userCharacter } = useBookTravelStore.getState();
       if (!selectedOutline || !selectedWorldBook) throw new Error('素材缺失');
       const materials = {
         outline: { id: selectedOutline.id, title: selectedOutline.title, content: selectedOutline.content },
@@ -665,62 +871,166 @@ const Story: React.FC = () => {
       const plannerState = { stableMemory, volatileMemory, assembledWorldModel, currentState: bookTravelStore.currentState, summaryMemory: bookTravelStore.summaryMemory || '', recentScenes: scenes.slice(-3), recentTurns: turns.slice(-5), userCharacter };
       const plannerRequest = buildBookTravelRequest('scene-planner', settings.bookTravelPlotPlannerPrompt, plannerConfig, materials, plannerState);
       const plannerPlanStr = await runBookTravelStreamTask('start_plan_book_travel_scene_stream', plannerRequest, { userInput });
-      let plan = cleanAndParseJSON(plannerPlanStr);
-      const newCurrentState = { ...(bookTravelStore.currentState || {}), ...(plan.stateChanges || plan.state_changes || {}) };
-      bookTravelStore.setCurrentState(newCurrentState);
+      plan = cleanAndParseJSON(plannerPlanStr);
+      newCurrentState = buildCurrentStateFromPlan(useBookTravelStore.getState().currentState, plan);
+      plannedScene = buildSceneFromPlan(plan, {
+        title: `新场景-${scenes.length + 1}`,
+        currentSituation: readPlanText(plan, 'summary'),
+        time: (newCurrentState as any).time || '',
+        location: (newCurrentState as any).location || '',
+        index: scenes.length + 1,
+      });
+      const store = useBookTravelStore.getState();
+      store.setCurrentState(newCurrentState);
+      store.addScene(plannedScene);
+      if (turnId) {
+        store.updateTurn(turnId, {
+          classification: 'change-scene',
+          status: 'writing',
+          failedStage: undefined,
+          plannerOutput: plan,
+          stateSnapshot: newCurrentState,
+          createdSceneId: plannedScene.id,
+        });
+      }
+      scrollToBottomOnce();
+      failedStage = 'writing';
       setStartProgressOpen(false);
       setStartProgressPhase('writer');
       setWriterOutput('');
-      const writerConfig = settings.agentConfigs?.bookTravelSceneWriter || {};
-      const writerState = { stableMemory, volatileMemory, assembledWorldModel, currentState: newCurrentState, summaryMemory: bookTravelStore.summaryMemory || '', recentScenes: scenes.slice(-3), recentTurns: turns.slice(-5), writerInstructions: plan.writerInstructions || plan.writer_instructions || '' };
-      const writerRequest = buildBookTravelRequest('scene-writer', settings.bookTravelSceneWriterPrompt, writerConfig, materials, writerState);
-      const allowedCast = plan.allowedCast || plan.allowed_cast || [];
-      const sceneJsonStr = await runBookTravelStreamTask('start_write_book_travel_change_scene_stream', writerRequest, { userInput: plan.writerInstructions || plan.writer_instructions || '', allowedSpeakers: allowedCast });
-      let scene = cleanAndParseJSON(sceneJsonStr);
-      const patch = scene.volatileMemoryPatch || scene.volatile_memory_patch;
-      if (patch && typeof patch === 'object') bookTravelStore.updateVolatileMemory(patch);
-      const rawBeat = scene.beat;
-      const singleBeat = rawBeat
-        ? { id: rawBeat.id || `beat-${Date.now()}`, content: rawBeat.content || '' }
-        : { id: `beat-${Date.now()}`, content: '' };
-      const repairedScene = {
-        id: scene.id || `scene-${Date.now()}`,
-        title: scene.title || `新场景-${scenes.length + 1}`,
-        summary: scene.summary || '',
-        currentSituation: scene.currentSituation || '',
-        time: scene.time || newCurrentState.time || '',
-        location: scene.location || newCurrentState.location || '',
-        activeCharacters: scene.activeCharacters || allowedCast,
-        beats: [singleBeat],
-      };
-      bookTravelStore.addScene(repairedScene);
-      const newTurn = { id: `turn-${Date.now()}`, userInput, classification: 'change-scene' as const, plannerOutput: plan, narrativeOutput: singleBeat.content, stateSnapshot: newCurrentState, createdSceneId: repairedScene.id, createdBeatIds: [singleBeat.id] };
-      bookTravelStore.appendTurn(newTurn);
-      if (plan.endingStatus && plan.endingStatus !== 'none' && plan.endingStatus !== 'active') {
-        const judgeConfig = settings.agentConfigs?.bookTravelEndingJudge || {};
-        const judgeState = { stableMemory, volatileMemory, assembledWorldModel, currentState: newCurrentState, summaryMemory: bookTravelStore.summaryMemory || '', recentScenes: [...scenes.slice(-3), repairedScene], recentTurns: [...turns.slice(-5), newTurn] };
-        const judgeRequest = buildBookTravelRequest('ending-judge', settings.bookTravelEndingJudgePrompt, judgeConfig, materials, judgeState);
-        const endingJsonStr = await invoke<string>('judge_book_travel_ending', { request: judgeRequest });
-        let ending = cleanAndParseJSON(endingJsonStr);
-        bookTravelStore.finishSession(ending);
-        message.success('已达成穿书结局！');
-      } else {
-        const keeperConfig = settings.agentConfigs?.bookTravelMemoryKeeper || {};
-        const keeperState = { stableMemory, volatileMemory, assembledWorldModel, currentState: newCurrentState, summaryMemory: bookTravelStore.summaryMemory || '', recentScenes: [...scenes.slice(-3), repairedScene], recentTurns: [...turns.slice(-5), newTurn] };
-        const keeperRequest = buildBookTravelRequest('memory-keeper', settings.bookTravelMemoryKeeperPrompt, keeperConfig, materials, keeperState);
-        invoke<string>('summarize_book_travel_memory', { request: keeperRequest }).then((resStr) => {
-          try { const res = cleanAndParseJSON(resStr); if (res.summary) bookTravelStore.updateSummaryMemory(res.summary); }
-          catch (e) { console.error('Failed to parse memory keeper summary:', e); }
-        }).catch((err) => { console.error('Failed to update memory keeper:', err); });
-      }
+      await runChangeSceneWriterForPlan({
+        userInput,
+        plan,
+        plannedScene,
+        currentState: newCurrentState,
+        turnId,
+        materials,
+        stableMemory,
+        volatileMemory,
+        assembledWorldModel,
+        recentScenes: scenes.slice(-3),
+        recentTurns: turns.slice(-5),
+      });
       setStartProgressPhase('done');
       message.success('已切换至新场景！');
     } catch (err: any) {
-      if (startCancelledRef.current) { message.info('已中断'); setStartProgressPhase('cancelled'); }
-      else { const errorMsg = String(err); message.error(`切换场景失败：${errorMsg}`); setStartProgressError(errorMsg); setStartProgressPhase('error'); }
+      if (startCancelledRef.current) {
+        message.info('已中断');
+        if (turnId) {
+          useBookTravelStore.getState().updateTurn(turnId, {
+            classification: 'change-scene',
+            status: 'error',
+            failedStage: undefined,
+            narrativeOutput: '已中断生成',
+          });
+        }
+        setStartProgressPhase('cancelled');
+      }
+      else {
+        const errorMsg = String(err);
+        message.error(`切换场景失败：${errorMsg}`);
+        if (turnId) {
+          useBookTravelStore.getState().updateTurn(turnId, {
+            classification: 'change-scene',
+            status: 'error',
+            failedStage,
+            plannerOutput: plan || undefined,
+            stateSnapshot: newCurrentState || useBookTravelStore.getState().currentState,
+            createdSceneId: plannedScene?.id,
+            narrativeOutput: failedStage === 'writing'
+              ? `写手生成失败：${errorMsg}`
+              : `切换场景失败：${errorMsg}`,
+          });
+        }
+        setStartProgressError(errorMsg);
+        setStartProgressPhase('error');
+      }
     } finally {
       if (elapsedInterval) clearInterval(elapsedInterval);
       setIsTransitioningScene(false);
+      startRunIdRef.current = null;
+      startResolverRef.current = null;
+    }
+  };
+
+  const retryBookTravelWriter = async (turn: BookTravelTurnSnapshot) => {
+    if (isBookTravelBusy || turn.failedStage !== 'writing') return;
+    setIsBookTravelSubmitting(true);
+    useBookTravelStore.getState().updateTurn(turn.id, {
+      status: 'writing',
+      failedStage: undefined,
+      narrativeOutput: '',
+    });
+
+    if (turn.classification === 'insert-beat') {
+      try {
+        await handleInsertBeatStream(turn.userInput, turn.id);
+      } finally {
+        setIsBookTravelSubmitting(false);
+      }
+      return;
+    }
+
+    setIsTransitioningScene(true);
+    setStartProgressOpen(false);
+    setStartProgressPhase('writer');
+    setWriterOutput('');
+    setStartProgressError('');
+    setStartElapsedMs(0);
+    startCancelledRef.current = false;
+    let elapsedInterval: ReturnType<typeof setInterval> | null = null;
+    try {
+      elapsedInterval = setInterval(() => setStartElapsedMs((p) => p + 100), 100);
+      const store = useBookTravelStore.getState();
+      const { selectedOutline, selectedWorldBook, selectedCharacterCards, stableMemory, volatileMemory, assembledWorldModel } = store;
+      if (!selectedOutline || !selectedWorldBook) throw new Error('素材缺失');
+      if (!turn.plannerOutput || !turn.createdSceneId) throw new Error('缺少可重试的场景规划');
+      const plannedScene = store.scenes.find((scene) => scene.id === turn.createdSceneId);
+      if (!plannedScene) throw new Error('找不到规划出的场景');
+      const materials = {
+        outline: { id: selectedOutline.id, title: selectedOutline.title, content: selectedOutline.content },
+        worldBook: { id: selectedWorldBook.id, title: selectedWorldBook.title, content: selectedWorldBook.content },
+        characterCards: selectedCharacterCards.map((cc: any) => ({ id: cc.id, title: cc.title, content: cc.content })),
+      };
+      await runChangeSceneWriterForPlan({
+        userInput: turn.userInput,
+        plan: turn.plannerOutput,
+        plannedScene,
+        currentState: turn.stateSnapshot || store.currentState,
+        turnId: turn.id,
+        materials,
+        stableMemory,
+        volatileMemory,
+        assembledWorldModel,
+        recentScenes: store.scenes.slice(-3),
+        recentTurns: store.turns.slice(-5),
+      });
+      setStartProgressPhase('done');
+      message.success('场景写手已重试完成');
+    } catch (err: any) {
+      if (startCancelledRef.current) {
+        message.info('已中断');
+        useBookTravelStore.getState().updateTurn(turn.id, {
+          status: 'error',
+          failedStage: undefined,
+          narrativeOutput: '已中断生成',
+        });
+        setStartProgressPhase('cancelled');
+      } else {
+        const errorMsg = String(err);
+        message.error(`写手生成失败：${errorMsg}`);
+        useBookTravelStore.getState().updateTurn(turn.id, {
+          status: 'error',
+          failedStage: 'writing',
+          narrativeOutput: `写手生成失败：${errorMsg}`,
+        });
+        setStartProgressError(errorMsg);
+        setStartProgressPhase('error');
+      }
+    } finally {
+      if (elapsedInterval) clearInterval(elapsedInterval);
+      setIsTransitioningScene(false);
+      setIsBookTravelSubmitting(false);
       startRunIdRef.current = null;
       startResolverRef.current = null;
     }
@@ -750,6 +1060,8 @@ const Story: React.FC = () => {
     startCancelledRef.current = false;
 
     let elapsedInterval: ReturnType<typeof setInterval> | null = null;
+    let openingTurnId: string | null = null;
+    let plannerCompleted = false;
     try {
       elapsedInterval = setInterval(() => setStartElapsedMs((prev) => prev + 100), 100);
 
@@ -768,46 +1080,57 @@ const Story: React.FC = () => {
       const plannerInput = `确认以入场点 [${entryPoint.title}] 入场，扮演新身份 [${userCharacter.name}]（${userCharacter.identity}）。\n详细局势：${entryPoint.situation || entryPoint.summary || ''}\n初始目标：${entryPoint.initialGoal || ''}\n面临风险：${entryPoint.risk || ''}`;
       const plannerPlanStr = await runBookTravelStreamTask('start_plan_book_travel_scene_stream', plannerRequest, { userInput: plannerInput });
 
-      let plan = cleanAndParseJSON(plannerPlanStr);
-      const newCurrentState = { ...(plannerState.currentState || {}), ...(plan.stateChanges || plan.state_changes || {}), time: entryPoint.timeAndLocation || plan.stateChanges?.time || plan.state_changes?.time || '', location: entryPoint.timeAndLocation || plan.stateChanges?.location || plan.state_changes?.location || '' };
-      bookTravelStore.setCurrentState(newCurrentState);
+      const plan = cleanAndParseJSON(plannerPlanStr);
+      const newCurrentState = buildCurrentStateFromPlan(
+        plannerState.currentState,
+        plan,
+        entryPoint.timeAndLocation || '',
+        entryPoint.timeAndLocation || '',
+      );
+      const plannedScene = buildSceneFromPlan(plan, {
+        title: entryPoint.title,
+        summary: entryPoint.situation || entryPoint.summary,
+        currentSituation: entryPoint.situation,
+        time: (newCurrentState as any).time || entryPoint.timeAndLocation,
+        location: (newCurrentState as any).location || entryPoint.timeAndLocation,
+        index: 1,
+      });
+      const store = useBookTravelStore.getState();
+      store.setCurrentState(newCurrentState);
+      store.addScene(plannedScene);
+      openingTurnId = `turn-${Date.now()}`;
+      plannerCompleted = true;
+      store.appendTurn({
+        id: openingTurnId,
+        userInput: plannerInput,
+        classification: 'change-scene' as const,
+        status: 'writing' as const,
+        plannerOutput: plan,
+        narrativeOutput: '',
+        stateSnapshot: newCurrentState,
+        createdSceneId: plannedScene.id,
+        createdBeatIds: [],
+      });
+      scrollToBottomOnce();
 
       setStartProgressOpen(false);
       setStartProgressPhase('writer');
       setWriterOutput('');
       const writerConfig = settings.agentConfigs?.bookTravelSceneWriter || {};
-      const writerState = { stableMemory, volatileMemory, assembledWorldModel, currentState: newCurrentState, summaryMemory: '', recentScenes: [], recentTurns: [], writerInstructions: plan.writerInstructions || plan.writer_instructions || '' };
+      const writerInstructions = readPlanText(plan, 'writerInstructions', 'writer_instructions') || plannerInput;
+      const writerState = { stableMemory, volatileMemory, assembledWorldModel, currentState: newCurrentState, summaryMemory: '', recentScenes: [], recentTurns: [], plannedScene, writerInstructions };
       const writerRequest = buildBookTravelRequest('scene-writer', settings.bookTravelSceneWriterPrompt, writerConfig, materials, writerState);
-      const allowedCast = plan.allowedCast || plan.allowed_cast || [];
-      const sceneJsonStr = await runBookTravelStreamTask('start_write_book_travel_change_scene_stream', writerRequest, { userInput: plan.writerInstructions || plan.writer_instructions || '', allowedSpeakers: allowedCast });
+      const sceneJsonStr = await runBookTravelStreamTask('start_write_book_travel_change_scene_stream', writerRequest, { userInput: writerInstructions, allowedSpeakers: plannedScene.activeCharacters || [] });
 
-      let scene = cleanAndParseJSON(sceneJsonStr);
-      const patch = scene.volatileMemoryPatch || scene.volatile_memory_patch;
-      if (patch && typeof patch === 'object') bookTravelStore.updateVolatileMemory(patch);
-
-      const repairedScene = {
-        id: scene.id || `scene-${Date.now()}`,
-        title: scene.title || entryPoint.title,
-        summary: scene.summary || entryPoint.situation || entryPoint.summary,
-        currentSituation: scene.currentSituation || entryPoint.situation,
-        time: scene.time || entryPoint.timeAndLocation,
-        location: scene.location || entryPoint.timeAndLocation,
-        activeCharacters: scene.activeCharacters || allowedCast,
-        beats: scene.beat
-          ? [{ id: scene.beat.id || `beat-${Date.now()}`, content: scene.beat.content || '' }]
-          : [{ id: `beat-${Date.now()}`, content: '' }],
-      };
-
-      bookTravelStore.addScene(repairedScene);
-      const firstBeat = repairedScene.beats[0];
-      bookTravelStore.appendTurn({
-        id: `turn-${Date.now()}`,
-        userInput: plannerInput,
-        classification: 'change-scene' as const,
+      const writerOutput = cleanAndParseJSON(sceneJsonStr);
+      const firstBeat = appendWriterBeatToCurrentScene(writerOutput);
+      useBookTravelStore.getState().updateTurn(openingTurnId, {
+        status: 'done' as const,
+        failedStage: undefined,
         plannerOutput: plan,
         narrativeOutput: firstBeat?.content || '',
         stateSnapshot: newCurrentState,
-        createdSceneId: repairedScene.id,
+        createdSceneId: plannedScene.id,
         createdBeatIds: [firstBeat?.id || ''],
       });
       const autoTitle = `${selectedOutline.title}-${entryPoint.title}`;
@@ -818,10 +1141,24 @@ const Story: React.FC = () => {
     } catch (err: any) {
       if (startCancelledRef.current) {
         message.info('已中断穿书开始');
+        if (openingTurnId) {
+          useBookTravelStore.getState().updateTurn(openingTurnId, {
+            status: 'error',
+            failedStage: undefined,
+            narrativeOutput: '已中断生成',
+          });
+        }
         setStartProgressPhase('cancelled');
       } else {
         const errorMsg = String(err);
-        message.error(`开始穿书冒险失败：${errorMsg}`);
+        if (openingTurnId) {
+          useBookTravelStore.getState().updateTurn(openingTurnId, {
+            status: 'error',
+            failedStage: 'writing',
+            narrativeOutput: `写手生成失败：${errorMsg}`,
+          });
+        }
+        message.error(plannerCompleted ? `写手生成失败：${errorMsg}` : `开始穿书冒险失败：${errorMsg}`);
         setStartProgressError(errorMsg);
         setStartProgressPhase('error');
         console.error(err);
@@ -836,51 +1173,79 @@ const Story: React.FC = () => {
 
   const handleSend = async () => {
     const trimmed = input.trim();
-    if (!trimmed || isStreaming) return;
+    if (!trimmed || isStreaming || isBookTravelBusy) return;
 
-    if (bookTravelStore.scenes.length > 0) {
+    if (isActiveBookTravelScene) {
+      setIsBookTravelSubmitting(true);
       setInput('');
+      const pendingTurnId = `turn-${Date.now()}`;
+      let pendingTurnCreated = false;
       try {
-        const { selectedOutline, selectedWorldBook, selectedCharacterCards } = bookTravelStore;
+        const { selectedOutline, selectedWorldBook, selectedCharacterCards } = useBookTravelStore.getState();
         if (!selectedOutline || !selectedWorldBook) {
           message.error('素材缺失，请重新装配素材');
           return;
         }
+        useBookTravelStore.getState().appendTurn({
+          id: pendingTurnId,
+          userInput: trimmed,
+          status: 'classifying',
+          narrativeOutput: '',
+          stateSnapshot: useBookTravelStore.getState().currentState,
+          createdBeatIds: [],
+        });
+        pendingTurnCreated = true;
+        scrollToBottomOnce();
         const materials = {
           outline: { id: selectedOutline.id, title: selectedOutline.title, content: selectedOutline.content },
           worldBook: { id: selectedWorldBook.id, title: selectedWorldBook.title, content: selectedWorldBook.content },
           characterCards: selectedCharacterCards.map((cc: any) => ({ id: cc.id, title: cc.title, content: cc.content })),
         };
         const classifierConfig = settings.agentConfigs?.bookTravelInputClassifier || {};
+        const latestBookTravelState = useBookTravelStore.getState();
         const classifierState = {
-          stableMemory: bookTravelStore.stableMemory,
-          volatileMemory: bookTravelStore.volatileMemory,
-          assembledWorldModel: bookTravelStore.assembledWorldModel,
-          currentState: bookTravelStore.currentState,
-          summaryMemory: bookTravelStore.summaryMemory || '',
-          recentScenes: bookTravelStore.scenes.slice(-3),
-          recentTurns: bookTravelStore.turns.slice(-5),
-          userCharacter: bookTravelStore.userCharacter,
+          stableMemory: latestBookTravelState.stableMemory,
+          volatileMemory: latestBookTravelState.volatileMemory,
+          assembledWorldModel: latestBookTravelState.assembledWorldModel,
+          currentState: latestBookTravelState.currentState,
+          summaryMemory: latestBookTravelState.summaryMemory || '',
+          recentScenes: latestBookTravelState.scenes.slice(-3),
+          recentTurns: latestBookTravelState.turns.slice(-5),
+          userCharacter: latestBookTravelState.userCharacter,
         };
         const classifierRequest = buildBookTravelRequest(
           'input-classifier',
-          '你是一个穿书输入分类器。根据用户的输入，判断其意图是以下哪一种：\n- meta: 元指令（如查看状态、存档、回顾剧情等）\n- insert-beat: 在当前场景中继续互动（对话、观察、小动作）\n- change-scene: 切换场景（离开地点、跳过时间、重大决定）\n只输出分类结果，不要解释。',
-          classifierConfig,
+          '你是一个穿书行动分类器。根据用户输入判断其会影响当前场景内的局部互动，还是需要切换到新场景。\n- insert-beat: 在当前场景中继续互动，例如对话、观察、小动作、短暂试探。\n- change-scene: 切换场景，例如离开地点、跳过时间、做出重大决定、触发新事件。\n只输出严格 JSON，classification 只能是 insert-beat 或 change-scene，不要解释。',
+          { ...classifierConfig, temperature: 0 },
           materials,
           classifierState,
         );
-        const classificationResult = await invoke<{ classification: 'meta' | 'insert-beat' | 'change-scene' }>('classify_book_travel_input', {
+        const classificationResult = await invoke<{ classification: 'insert-beat' | 'change-scene' }>('classify_book_travel_input', {
           request: classifierRequest,
           userInput: trimmed,
         });
         switch (classificationResult.classification) {
-          case 'meta': await handleMetaCommand(trimmed); break;
-          case 'insert-beat': await handleInsertBeatStream(trimmed); break;
-          case 'change-scene': await handleChangeSceneStream(trimmed); break;
+          case 'insert-beat':
+            useBookTravelStore.getState().updateTurn(pendingTurnId, { classification: 'insert-beat', status: 'writing', failedStage: undefined });
+            await handleInsertBeatStream(trimmed, pendingTurnId);
+            break;
+          case 'change-scene':
+            useBookTravelStore.getState().updateTurn(pendingTurnId, { classification: 'change-scene', status: 'writing', failedStage: undefined });
+            await handleChangeSceneStream(trimmed, pendingTurnId);
+            break;
           default: message.warning('无法识别输入意图，请重新输入');
         }
       } catch (err) {
+        if (pendingTurnCreated) {
+          useBookTravelStore.getState().updateTurn(pendingTurnId, {
+            status: 'error',
+            failedStage: 'classifying',
+            narrativeOutput: `处理失败：${String(err)}`,
+          });
+        }
         message.error(`处理失败：${String(err)}`);
+      } finally {
+        setIsBookTravelSubmitting(false);
       }
       return;
     }
@@ -1096,7 +1461,7 @@ const Story: React.FC = () => {
                 disabled={isStreaming}
                 icon={<FileProtectOutlined />}
                 onClick={() => {
-                  bookTravelStore.saveProgress();
+                  bookTravelStore.saveProgress(currentBookTravelSceneTitle);
                   message.success('进度已保存');
                 }}
                 style={{
@@ -1114,7 +1479,7 @@ const Story: React.FC = () => {
           )}
 
           <Tooltip title="重开新冒险">
-            <Button type="text" icon={<ReloadOutlined />} onClick={createNewSession} />
+            <Button aria-label="重开新冒险" type="text" icon={<ReloadOutlined />} onClick={restartBookTravelAdventure} />
           </Tooltip>
 
           <Dropdown
@@ -1126,8 +1491,8 @@ const Story: React.FC = () => {
                     <div className="agent-session-menu-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', minWidth: 200, padding: '4px 0' }}>
                       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', marginRight: 16 }}>
                         <strong style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{progress.title}</strong>
-                        <span style={{ fontSize: '11px', color: '#999', marginTop: 2 }}>
-                          {new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(progress.savedAt))}
+                        <span style={{ fontSize: '12px', color: '#999', marginTop: 2 }}>
+                          {savedProgressDateFormatter.format(new Date(progress.savedAt))}
                         </span>
                       </div>
                       <Button
@@ -1167,6 +1532,13 @@ const Story: React.FC = () => {
               const createdScene = turn.createdSceneId ? bookTravelStore.scenes.find((s) => s.id === turn.createdSceneId) : null;
               const currentScene = bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId);
               const sceneContext = createdScene || currentScene;
+              const sceneGoals = getPlannerSceneGoals(turn.plannerOutput);
+              const userCharacterLabel = bookTravelStore.userCharacter
+                ? `${bookTravelStore.userCharacter.name}（${bookTravelStore.userCharacter.identity}）`
+                : '';
+              const shouldShowSceneBrief = turn.classification === 'change-scene' && (Boolean(userCharacterLabel) || sceneGoals.length > 0);
+              const shouldShowSituationCard = shouldShowSceneBrief || Boolean(sceneContext?.currentSituation);
+              const canRetryWriter = turn.status === 'error' && turn.failedStage === 'writing';
               return (
                 <div key={turn.id} style={{ marginBottom: 24 }}>
                   <div style={{ textAlign: 'right', marginBottom: 8 }}>
@@ -1186,9 +1558,23 @@ const Story: React.FC = () => {
                           {createdScene.summary}
                         </div>
                       )}
-                      {sceneContext.currentSituation && (
-                        <div style={{ fontSize: 12, color: '#5c5751', marginBottom: 8, background: '#fff', padding: '8px 10px', borderRadius: 6 }}>
-                          <span style={{ color: '#d97757', fontWeight: 600 }}>当前局势：</span>{sceneContext.currentSituation}
+                      {shouldShowSituationCard && (
+                        <div data-testid="scene-situation-card" style={{ fontSize: 12, color: '#5c5751', marginBottom: 8, background: '#fff', padding: '8px 10px', borderRadius: 6 }}>
+                          {userCharacterLabel && (
+                            <div>
+                              <span style={{ color: '#d97757', fontWeight: 600 }}>扮演身份：</span>{userCharacterLabel}
+                            </div>
+                          )}
+                          {sceneGoals.length > 0 && (
+                            <div>
+                              <span style={{ color: '#d97757', fontWeight: 600 }}>场景目标：</span>{sceneGoals.join('、')}
+                            </div>
+                          )}
+                          {sceneContext.currentSituation && (
+                            <div>
+                              <span style={{ color: '#d97757', fontWeight: 600 }}>当前局势：</span>{sceneContext.currentSituation}
+                            </div>
+                          )}
                         </div>
                       )}
                       {sceneContext.activeCharacters && sceneContext.activeCharacters.length > 0 && (
@@ -1200,11 +1586,32 @@ const Story: React.FC = () => {
                       )}
                     </div>
                   )}
-                  <div style={{ textAlign: 'left' }}>
-                    <div style={{ display: 'inline-block', background: '#fff', border: '1px solid #eae6df', padding: '12px 14px', borderRadius: '12px 12px 12px 2px', maxWidth: '80%', color: '#33312e', fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
-                      {turn.narrativeOutput}
+                  {turn.narrativeOutput ? (
+                    <div style={{ textAlign: 'left' }}>
+                      <div style={{ display: 'inline-block', background: '#fff', border: '1px solid #eae6df', padding: '12px 14px', borderRadius: '12px 12px 12px 2px', maxWidth: '80%', color: '#33312e', fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+                        {turn.narrativeOutput}
+                      </div>
+                      {canRetryWriter && (
+                        <div style={{ marginTop: 6 }}>
+                          <Button
+                            disabled={isBookTravelBusy}
+                            icon={<ReloadOutlined />}
+                            onClick={() => void retryBookTravelWriter(turn)}
+                            size="small"
+                            type="text"
+                            style={{ color: '#d97757', paddingInline: 6 }}
+                          >
+                            重试写手
+                          </Button>
+                        </div>
+                      )}
                     </div>
-                  </div>
+                  ) : turn.status === 'classifying' ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#8c8882', fontSize: 13, paddingLeft: 4 }}>
+                      <Spin size="small" />
+                      正在识别行动...
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
@@ -1527,12 +1934,27 @@ const Story: React.FC = () => {
             <div className="agent-composer__actions" style={{ position: 'absolute', bottom: '12px', left: '16px', right: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', zIndex: 3 }}>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '12px', color: '#8c8882' }}>
-                  当前模式：
-                  <Tag color="orange" style={{ margin: 0 }}>
-                    {inputMode === 'speech' ? '说话 (我：“内容”)' : inputMode === 'behavior' ? '动作 (（我 内容）)' : '第三方剧情推进'}
-                  </Tag>
-                </span>
+                {bookTravelStore.scenes.length > 0 ? (
+                  <Tooltip title="查看当前状态和剧情回顾">
+                    <Button
+                      aria-label="状态"
+                      icon={<ProfileOutlined />}
+                      onClick={showBookTravelStatusModal}
+                      size="small"
+                      type="text"
+                      style={{ color: '#d97757', fontWeight: 500, paddingInline: 8 }}
+                    >
+                      状态
+                    </Button>
+                  </Tooltip>
+                ) : (
+                  <span style={{ fontSize: '12px', color: '#8c8882' }}>
+                    当前模式：
+                    <Tag color="orange" style={{ margin: 0 }}>
+                      {inputMode === 'speech' ? '说话 (我：“内容”)' : inputMode === 'behavior' ? '动作 (（我 内容）)' : '第三方剧情推进'}
+                    </Tag>
+                  </span>
+                )}
               </div>
 
               <div className="agent-send-cluster" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -1547,10 +1969,10 @@ const Story: React.FC = () => {
                   </button>
                 </Tooltip>
 
-                <Tooltip title={isStreaming ? '停止' : isSessionArchived ? '当前故事已归档' : '提交行动'}>
+                <Tooltip title={isStreaming ? '停止' : isBookTravelBusy ? '正在处理行动' : isSessionArchived ? '当前故事已归档' : '提交行动'}>
                   <Button
                     className="de-ai-agent-run-button"
-                    disabled={isSessionArchived || (!isStreaming && !input.trim())}
+                    disabled={isSessionArchived || isBookTravelBusy || (!isStreaming && !input.trim())}
                     icon={isStreaming ? <StopOutlined /> : <PlayCircleOutlined />}
                     onClick={isStreaming ? handleStop : handleSend}
                     shape="circle"

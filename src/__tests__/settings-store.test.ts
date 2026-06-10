@@ -152,31 +152,31 @@ describe('Settings store default exports', () => {
       thinkingDepth: 'off',
     });
     expect(agentConfigs.bookTravelEntryDirector).toEqual({
-      temperature: 0.6,
-      maxOutputTokens: 4096,
+      temperature: 0,
+      maxOutputTokens: 8192,
       maxContextTokens: 128000,
       thinkingDepth: 'off',
     });
     expect(agentConfigs.bookTravelPlotPlanner).toEqual({
-      temperature: 0.2,
+      temperature: 0,
       maxOutputTokens: 8192,
       maxContextTokens: 128000,
       thinkingDepth: 'off',
     });
     expect(agentConfigs.bookTravelSceneWriter).toEqual({
-      temperature: 0.8,
+      temperature: 0,
       maxOutputTokens: 8192,
       maxContextTokens: 128000,
       thinkingDepth: 'off',
     });
     expect(agentConfigs.bookTravelMemoryKeeper).toEqual({
-      temperature: 0.2,
-      maxOutputTokens: 4096,
+      temperature: 0,
+      maxOutputTokens: 8192,
       maxContextTokens: 128000,
       thinkingDepth: 'off',
     });
     expect(agentConfigs.bookTravelEndingJudge).toEqual({
-      temperature: 0.3,
+      temperature: 0,
       maxOutputTokens: 8192,
       maxContextTokens: 128000,
       thinkingDepth: 'off',
@@ -186,6 +186,12 @@ describe('Settings store default exports', () => {
     expect(defaultBookTravelEntryDirectorPrompt).toContain('穿书入场导演');
     expect(defaultBookTravelPlotPlannerPrompt).toContain('穿书剧情规划师');
     expect(defaultBookTravelSceneWriterPrompt).toContain('穿书场景写手');
+    expect(defaultBookTravelPlotPlannerPrompt).toContain('activeCharacters');
+    expect(defaultBookTravelPlotPlannerPrompt).toContain('time');
+    expect(defaultBookTravelPlotPlannerPrompt).toContain('location');
+    expect(defaultBookTravelPlotPlannerPrompt).not.toContain('allowedCast');
+    expect(defaultBookTravelSceneWriterPrompt).toContain('只输出 beat');
+    expect(defaultBookTravelSceneWriterPrompt).not.toContain('activeCharacters：字符串数组');
     expect(defaultBookTravelMemoryKeeperPrompt).toContain('穿书记忆整理员');
     expect(defaultBookTravelEndingJudgePrompt).toContain('穿书结局裁判');
   });
