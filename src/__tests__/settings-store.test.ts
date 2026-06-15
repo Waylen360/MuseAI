@@ -21,6 +21,7 @@ import {
   defaultBookTravelMemoryKeeperPrompt,
   defaultBookTravelEndingJudgePrompt,
   defaultAgentConfigs,
+  applyCompactionTurnThresholdDefaults,
   useSettingsStore,
 } from '../stores/useSettingsStore';
 
@@ -96,6 +97,7 @@ describe('Settings store default exports', () => {
     expect(defaultPartnerChatPrompt).toContain('避免重复空转');
     expect(defaultPartnerChatPrompt).toContain('每轮推进关系或情境');
     expect(defaultAgentConfigs.partnerChat.maxOutputTokens).toBe(1024);
+    expect(defaultAgentConfigs.partnerChat.compactionTurnThreshold).toBe(20);
   });
 
   it('resetPartnerChatPrompt should restore repeat-resistant default prompt', () => {
@@ -126,14 +128,34 @@ describe('Settings store default exports', () => {
       temperature: 0.7,
       maxOutputTokens: 4096,
       maxContextTokens: 128000,
+      compactionTurnThreshold: 20,
       thinkingDepth: 'off',
     });
     expect(agentConfigs.storyDynamicAgent).toEqual({
       temperature: 0.7,
       maxOutputTokens: 4096,
       maxContextTokens: 128000,
+      compactionTurnThreshold: 20,
       thinkingDepth: 'off',
     });
+  });
+
+  it('fills compaction turn threshold only for chat and story agents', () => {
+    const normalized = applyCompactionTurnThresholdDefaults({
+      partnerChat: { temperature: 0.4 },
+      storyAgent: { compactionTurnThreshold: 32 },
+      storyDynamicAgent: {},
+      writer: { temperature: 0.2 },
+    });
+
+    expect(defaultAgentConfigs.partnerChat.compactionTurnThreshold).toBe(20);
+    expect(defaultAgentConfigs.storyAgent.compactionTurnThreshold).toBe(20);
+    expect(defaultAgentConfigs.storyDynamicAgent.compactionTurnThreshold).toBe(20);
+    expect(defaultAgentConfigs.writer.compactionTurnThreshold).toBeUndefined();
+    expect(normalized.partnerChat).toEqual({ temperature: 0.4, compactionTurnThreshold: 20 });
+    expect(normalized.storyAgent.compactionTurnThreshold).toBe(32);
+    expect(normalized.storyDynamicAgent.compactionTurnThreshold).toBe(20);
+    expect(normalized.writer.compactionTurnThreshold).toBeUndefined();
   });
 
   it('should keep background extraction defaults separate for world book and character card', () => {

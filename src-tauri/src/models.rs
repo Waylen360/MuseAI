@@ -68,6 +68,7 @@ pub struct ChatStreamRequest {
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
     pub max_context_tokens: Option<u32>,
+    pub compaction_turn_threshold: Option<u32>,
     pub thinking_depth: Option<String>,
     pub system_prompt: String,
     pub workspace_path: Option<String>,
@@ -582,6 +583,17 @@ pub struct DailyActivity {
 pub struct WritingStats {
     pub total_works: usize,
     pub total_word_count: usize,
+    pub daily_activity: Vec<DailyActivity>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractionStats {
+    pub world_count: usize,
+    pub character_count: usize,
+    pub chat_count: usize,
+    pub adventure_count: usize,
+    pub book_travel_count: usize,
     pub daily_activity: Vec<DailyActivity>,
 }
 

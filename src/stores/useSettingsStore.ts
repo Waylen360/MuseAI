@@ -18,6 +18,7 @@ export interface AgentConfig {
   temperature?: number;
   maxOutputTokens?: number;
   maxContextTokens?: number;
+  compactionTurnThreshold?: number;
   thinkingDepth?: 'off' | 'low' | 'medium' | 'high';
   concurrency?: number;
 }
@@ -819,6 +820,21 @@ const ensureBookTravelSceneWriterPrompt = (prompt?: string) => {
   return `${current}\n\n${bookTravelInputModeInstruction}`;
 };
 
+export const compactionTurnThresholdAgentIds = ['partnerChat', 'storyAgent', 'storyDynamicAgent'] as const;
+
+export const applyCompactionTurnThresholdDefaults = (
+  agentConfigs: Record<string, AgentConfig>,
+): Record<string, AgentConfig> => {
+  const next = { ...agentConfigs };
+  compactionTurnThresholdAgentIds.forEach((agentId) => {
+    next[agentId] = {
+      ...next[agentId],
+      compactionTurnThreshold: next[agentId]?.compactionTurnThreshold ?? 20,
+    };
+  });
+  return next;
+};
+
 export const defaultAgentConfigs: Record<string, AgentConfig> = {
   writer: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' },
   workSummary: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' },
@@ -826,7 +842,7 @@ export const defaultAgentConfigs: Record<string, AgentConfig> = {
   remover: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'off' },
   outlineCreation: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' },
   outlineAssessment: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' },
-  partnerChat: { temperature: 0.7, maxOutputTokens: 1024, maxContextTokens: 128000, thinkingDepth: 'off' },
+  partnerChat: { temperature: 0.7, maxOutputTokens: 1024, maxContextTokens: 128000, compactionTurnThreshold: 20, thinkingDepth: 'off' },
   reverseOutline: { concurrency: 5 },
   reverseOutlineShort: { temperature: 0, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'off' },
   reverseOutlineLongSummary: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 200000, thinkingDepth: 'off' },
@@ -834,8 +850,8 @@ export const defaultAgentConfigs: Record<string, AgentConfig> = {
   backgroundExtraction: { concurrency: 5 },
   backgroundWorldBook: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' },
   backgroundCharacterCard: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' },
-  storyAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
-  storyDynamicAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' },
+  storyAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, compactionTurnThreshold: 20, thinkingDepth: 'off' },
+  storyDynamicAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, compactionTurnThreshold: 20, thinkingDepth: 'off' },
   bookTravelMaterialAssembler: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' },
   bookTravelEntryDirector: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' },
   bookTravelPlotPlanner: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' },
@@ -1083,7 +1099,7 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'museai-settings-storage',
       storage: createJSONStorage(() => createDiskStorage('settings-store', 'museai-settings-storage')),
-      version: 18,
+      version: 19,
       partialize: (state) => {
         const { worksDirectory: _, ...rest } = state;
         return rest as SettingsState;
@@ -1097,7 +1113,7 @@ export const useSettingsStore = create<SettingsState>()(
           remover: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'off' as const },
           outlineCreation: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' as const },
           outlineAssessment: { temperature: 0.7, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'low' as const },
-          partnerChat: { temperature: 0.7, maxOutputTokens: 1024, maxContextTokens: 128000, thinkingDepth: 'off' as const },
+          partnerChat: { temperature: 0.7, maxOutputTokens: 1024, maxContextTokens: 128000, compactionTurnThreshold: 20, thinkingDepth: 'off' as const },
           reverseOutline: { concurrency: 5 },
           reverseOutlineShort: { temperature: 0, maxOutputTokens: 32000, maxContextTokens: 200000, thinkingDepth: 'off' as const },
           reverseOutlineLongSummary: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 200000, thinkingDepth: 'off' as const },
@@ -1105,8 +1121,8 @@ export const useSettingsStore = create<SettingsState>()(
           backgroundExtraction: { concurrency: 5 },
           backgroundWorldBook: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' as const },
           backgroundCharacterCard: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' as const },
-          storyAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
-          storyDynamicAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
+          storyAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, compactionTurnThreshold: 20, thinkingDepth: 'off' as const },
+          storyDynamicAgent: { temperature: 0.7, maxOutputTokens: 4096, maxContextTokens: 128000, compactionTurnThreshold: 20, thinkingDepth: 'off' as const },
           bookTravelMaterialAssembler: { temperature: 0, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' as const },
           bookTravelEntryDirector: { temperature: 0.6, maxOutputTokens: 4096, maxContextTokens: 128000, thinkingDepth: 'off' as const },
           bookTravelPlotPlanner: { temperature: 0.2, maxOutputTokens: 8192, maxContextTokens: 128000, thinkingDepth: 'off' as const },
@@ -1116,7 +1132,7 @@ export const useSettingsStore = create<SettingsState>()(
           chatArchive: { temperature: 0.3, maxOutputTokens: 32000, maxContextTokens: 128000, thinkingDepth: 'off' as const },
           storyArchive: { temperature: 0.3, maxOutputTokens: 32000, maxContextTokens: 128000, thinkingDepth: 'off' as const },
         };
-        const migratedAgentConfigs = { ...defaultConfigs };
+        const migratedAgentConfigs = applyCompactionTurnThresholdDefaults({ ...defaultConfigs });
 
         Object.keys(defaultConfigs).forEach((key) => {
           const k = key as keyof typeof defaultConfigs;

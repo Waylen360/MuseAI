@@ -385,18 +385,22 @@ const useMobileStoryView = () => {
       userInfo: partnerChatUserInfo,
       characterCards: selectedCards.map(c => ({ id: c.id, name: c.name, content: c.content })),
     } : null;
+    const storyAgentConfigId = dynamicRoleLoadingEnabled ? 'storyDynamicAgent' : 'storyAgent';
+    const storyAgentConfig = settings.agentConfigs?.[storyAgentConfigId] || {};
 
     try {
       const { runId } = await appInvoke<{ runId: string }>('start_chat_completion_stream', {
         request: {
+          agentId: storyAgentConfigId,
           modelInterface: settings.modelInterface,
           baseUrl: '',
           apiKey: '',
           model: '',
-          temperature: settings.agentConfigs?.storyAgent?.temperature ?? 0.3,
-          maxOutputTokens: settings.agentConfigs?.storyAgent?.maxOutputTokens ?? 32000,
-          maxContextTokens: settings.agentConfigs?.storyAgent?.maxContextTokens ?? 200000,
-          thinkingDepth: settings.agentConfigs?.storyAgent?.thinkingDepth ?? 'off',
+          temperature: storyAgentConfig.temperature ?? 0.3,
+          maxOutputTokens: storyAgentConfig.maxOutputTokens ?? 32000,
+          maxContextTokens: storyAgentConfig.maxContextTokens ?? 200000,
+          compactionTurnThreshold: storyAgentConfig.compactionTurnThreshold ?? 20,
+          thinkingDepth: storyAgentConfig.thinkingDepth ?? 'off',
           systemPrompt,
           messages: modelMessages,
           contextCompaction: contextCompactionRef.current,

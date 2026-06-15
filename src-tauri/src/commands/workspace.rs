@@ -334,6 +334,168 @@ pub fn get_writing_stats(app: AppHandle) -> Result<models::WritingStats, String>
     })
 }
 
+fn build_empty_daily_counts(now_secs: i64) -> HashMap<String, usize> {
+    let today_start = now_secs - (now_secs % 86400);
+    let mut daily_counts = HashMap::new();
+    for i in (0..30).rev() {
+        let day_start = today_start - i * 86400;
+        let date_str = chrono::DateTime::from_timestamp(day_start, 0)
+            .map(|dt| dt.format("%Y-%m-%d").to_string())
+            .unwrap_or_default();
+        daily_counts.insert(date_str, 0);
+    }
+    daily_counts
+}
+
+fn build_daily_activity(
+    now_secs: i64,
+    daily_counts: &HashMap<String, usize>,
+) -> Vec<models::DailyActivity> {
+    let today_start = now_secs - (now_secs % 86400);
+    let mut daily_activity = Vec::new();
+    for i in (0..30).rev() {
+        let day_start = today_start - i * 86400;
+        let date_str = chrono::DateTime::from_timestamp(day_start, 0)
+            .map(|dt| dt.format("%Y-%m-%d").to_string())
+            .unwrap_or_default();
+        let count = daily_counts.get(&date_str).copied().unwrap_or(0);
+        daily_activity.push(models::DailyActivity {
+            date: date_str,
+            count,
+        });
+    }
+    daily_activity
+}
+
+fn persisted_state_value(text: &str) -> Option<Value> {
+    let parsed: Value = serde_json::from_str(text).ok()?;
+    if let Some(state) = parsed.get("state") {
+        Some(state.clone())
+    } else {
+        Some(parsed)
+    }
+}
+
+fn count_state_array(base: &Path, store_name: &str, key: &str) -> usize {
+    load_app_state_path(base, store_name)
+        .ok()
+        .and_then(|text| persisted_state_value(&text))
+        .and_then(|state| {
+            state
+                .get(key)
+                .and_then(|value| value.as_array())
+                .map(Vec::len)
+        })
+        .unwrap_or(0)
+}
+
+fn add_daily_activity(daily_counts: &mut HashMap<String, usize>, timestamp_millis: u64) {
+    let secs = (timestamp_millis / 1000) as i64;
+    let day_start = secs - (secs % 86400);
+    if let Some(date_str) = chrono::DateTime::from_timestamp(day_start, 0)
+        .map(|dt| dt.format("%Y-%m-%d").to_string())
+    {
+        if let Some(counter) = daily_counts.get_mut(&date_str) {
+            *counter += 1;
+        }
+    }
+}
+
+fn count_book_travel_saved_progresses(
+    base: &Path,
+    daily_counts: &mut HashMap<String, usize>,
+) -> usize {
+    let Some(state) = load_app_state_path(base, "book-travel-store")
+        .ok()
+        .and_then(|text| persisted_state_value(&text))
+    else {
+        return 0;
+    };
+    let Some(saved_progresses) = state.get("savedProgresses").and_then(|value| value.as_array())
+    else {
+        return 0;
+    };
+    for progress in saved_progresses {
+        if let Some(saved_at) = progress.get("savedAt").and_then(|value| value.as_u64()) {
+            add_daily_activity(daily_counts, saved_at);
+        }
+    }
+    saved_progresses.len()
+}
+
+fn count_sessions(base: &Path, daily_counts: &mut HashMap<String, usize>) -> (usize, usize) {
+    let dir = base.join("MuseAI").join("agent-sessions");
+    let Ok(entries) = fs::read_dir(dir) else {
+        return (0, 0);
+    };
+
+    let mut chat_count = 0;
+    let mut adventure_count = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(record) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let Some(id) = record.get("id").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        let session_kind = record.get("sessionKind").and_then(|value| value.as_str());
+        let is_chat = id.starts_with("partner-session-");
+        let is_adventure = id.starts_with("story-session-")
+            && (session_kind == Some("story") || session_kind.is_none());
+        if !is_chat && !is_adventure {
+            continue;
+        }
+
+        if is_chat {
+            chat_count += 1;
+        } else {
+            adventure_count += 1;
+        }
+        if let Some(saved_at) = record.get("savedAt").and_then(|value| value.as_u64()) {
+            add_daily_activity(daily_counts, saved_at);
+        }
+    }
+
+    (chat_count, adventure_count)
+}
+
+fn get_interaction_stats_for_root(
+    base: &Path,
+    now: SystemTime,
+) -> Result<models::InteractionStats, String> {
+    let now_secs = now
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs() as i64;
+    let mut daily_counts = build_empty_daily_counts(now_secs);
+    let world_count = count_state_array(base, "partner-store", "worldBooks");
+    let character_count = count_state_array(base, "partner-store", "characterCards");
+    let (chat_count, adventure_count) = count_sessions(base, &mut daily_counts);
+    let book_travel_count = count_book_travel_saved_progresses(base, &mut daily_counts);
+
+    Ok(models::InteractionStats {
+        world_count,
+        character_count,
+        chat_count,
+        adventure_count,
+        book_travel_count,
+        daily_activity: build_daily_activity(now_secs, &daily_counts),
+    })
+}
+
+#[tauri::command]
+pub fn get_interaction_stats(app: AppHandle) -> Result<models::InteractionStats, String> {
+    let doc_dir = app.path().document_dir().map_err(|e| e.to_string())?;
+    get_interaction_stats_for_root(&doc_dir, SystemTime::now())
+}
+
 pub fn load_app_state_path(base: &Path, name: &str) -> Result<String, String> {
     if name.contains('/') || name.contains('\\') || name.contains("..") {
         return Err("非法的状态名称".to_string());
@@ -477,6 +639,83 @@ mod tests {
         let root = temp_path("config");
         assert!(load_app_state_path(&root, "../etc/passwd").is_err());
         assert!(load_app_state_path(&root, "foo/bar").is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn interaction_stats_returns_empty_counts_without_data() {
+        let root = temp_path("interaction-empty");
+        let now = UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+
+        let stats = get_interaction_stats_for_root(&root, now).expect("stats");
+
+        assert_eq!(stats.world_count, 0);
+        assert_eq!(stats.character_count, 0);
+        assert_eq!(stats.chat_count, 0);
+        assert_eq!(stats.adventure_count, 0);
+        assert_eq!(stats.book_travel_count, 0);
+        assert_eq!(stats.daily_activity.len(), 30);
+        assert!(stats.daily_activity.iter().all(|day| day.count == 0));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn interaction_stats_counts_partner_sessions_and_book_travel_progress() {
+        let root = temp_path("interaction-data");
+        let config_dir = root.join("MuseAI").join("config");
+        let sessions_dir = root.join("MuseAI").join("agent-sessions");
+        fs::create_dir_all(&config_dir).expect("create config");
+        fs::create_dir_all(&sessions_dir).expect("create sessions");
+
+        fs::write(
+            config_dir.join("partner-store.json"),
+            r#"{"state":{"worldBooks":[{"id":"w1"},{"id":"w2"}],"characterCards":[{"id":"c1"},{"id":"c2"},{"id":"c3"}]}}"#,
+        )
+        .expect("write partner store");
+
+        let now_secs = 1_700_000_000_u64;
+        let today_millis = now_secs * 1000;
+        let yesterday_millis = (now_secs - 86_400) * 1000;
+        fs::write(
+            config_dir.join("book-travel-store.json"),
+            format!(
+                r#"{{"state":{{"savedProgresses":[{{"id":"p1","savedAt":{today_millis}}},{{"id":"p2","savedAt":{yesterday_millis}}}]}}}}"#
+            ),
+        )
+        .expect("write book travel store");
+
+        fs::write(
+            sessions_dir.join("partner-session-1.json"),
+            format!(r#"{{"id":"partner-session-1","savedAt":{today_millis}}}"#),
+        )
+        .expect("write chat session");
+        fs::write(
+            sessions_dir.join("story-session-1.json"),
+            format!(
+                r#"{{"id":"story-session-1","sessionKind":"story","savedAt":{yesterday_millis}}}"#
+            ),
+        )
+        .expect("write adventure session");
+        fs::write(
+            sessions_dir.join("story-session-book.json"),
+            format!(
+                r#"{{"id":"story-session-book","sessionKind":"bookTravel","savedAt":{today_millis}}}"#
+            ),
+        )
+        .expect("write ignored book travel session");
+        fs::write(sessions_dir.join("note.txt"), "{}").expect("write ignored text");
+
+        let now = UNIX_EPOCH + std::time::Duration::from_secs(now_secs);
+        let stats = get_interaction_stats_for_root(&root, now).expect("stats");
+
+        assert_eq!(stats.world_count, 2);
+        assert_eq!(stats.character_count, 3);
+        assert_eq!(stats.chat_count, 1);
+        assert_eq!(stats.adventure_count, 1);
+        assert_eq!(stats.book_travel_count, 2);
+        assert_eq!(stats.daily_activity.len(), 30);
+        assert_eq!(stats.daily_activity[28].count, 2);
+        assert_eq!(stats.daily_activity[29].count, 2);
         let _ = fs::remove_dir_all(root);
     }
 

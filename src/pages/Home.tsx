@@ -10,8 +10,7 @@ import {
   MessageOutlined,
   CompassOutlined,
   HeartOutlined,
-  FileTextOutlined,
-  FontSizeOutlined,
+  UserOutlined,
   FireOutlined,
 } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
@@ -26,9 +25,12 @@ interface DailyActivity {
   count: number;
 }
 
-interface WritingStats {
-  totalWorks: number;
-  totalWordCount: number;
+interface InteractionStats {
+  worldCount: number;
+  characterCount: number;
+  chatCount: number;
+  adventureCount: number;
+  bookTravelCount: number;
   dailyActivity: DailyActivity[];
 }
 
@@ -40,7 +42,6 @@ const writingModules = [
 ];
 
 const companionModules = [
-  { key: '/background', label: '背景', icon: <GlobalOutlined />, color: '#8b7355' },
   { key: '/chat', label: '聊天', icon: <MessageOutlined />, color: '#8b7355' },
   { key: '/adventure', label: '冒险', icon: <CompassOutlined />, color: '#8b7355' },
   { key: '/bond', label: '羁绊', icon: <HeartOutlined />, color: '#8b7355' },
@@ -70,6 +71,10 @@ const HOME_SECTION_LABEL_STYLE: React.CSSProperties = {
   marginTop: 28,
 };
 
+const HOME_CONTENT_MAX_WIDTH = 1180;
+const HOME_INTERACTION_CONTENT_WIDTH = 720;
+const HOME_CARD_BODY_INLINE_PADDING = 28;
+
 function getGreeting(): string {
   const hour = new Date().getHours();
   if (hour < 6) return '夜深了';
@@ -95,15 +100,15 @@ function getHeatColor(count: number): string {
 
 const Home: React.FC = () => {
   const navigate = useNavigate();
-  const [stats, setStats] = useState<WritingStats | null>(null);
+  const [stats, setStats] = useState<InteractionStats | null>(null);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     const loadStats = async () => {
       try {
-        const result: WritingStats = await invoke('get_writing_stats');
+        const result: InteractionStats = await invoke('get_interaction_stats');
         setStats(result);
       } catch (e) {
-        console.error('Failed to load writing stats:', e);
+        console.error('Failed to load interaction stats:', e);
       } finally {
         setLoading(false);
       }
@@ -115,13 +120,18 @@ const Home: React.FC = () => {
   const today = new Date();
   const dateStr = `${today.getFullYear()}年${today.getMonth() + 1}月${today.getDate()}日`;
   const weekStr = WEEK_DAYS[today.getDay()];
-
-  const activeDays = stats?.dailyActivity.filter((d) => d.count > 0).length ?? 0;
+  const interactionStats = [
+    { label: '世界数', value: stats?.worldCount ?? 0, icon: <GlobalOutlined /> },
+    { label: '角色数', value: stats?.characterCount ?? 0, icon: <UserOutlined /> },
+    { label: '对话次数', value: stats?.chatCount ?? 0, icon: <MessageOutlined /> },
+    { label: '冒险次数', value: stats?.adventureCount ?? 0, icon: <CompassOutlined /> },
+    { label: '穿书次数', value: stats?.bookTravelCount ?? 0, icon: <FireOutlined /> },
+  ];
 
   return (
     <div
       style={{
-        padding: '40px 48px',
+        padding: '40px 48px 40px 72px',
         height: '100%',
         overflow: 'auto',
         background: warmMinimalistTheme.components?.Layout?.bodyBg,
@@ -137,8 +147,8 @@ const Home: React.FC = () => {
         </Text>
       </div>
 
-      {/* 创作统计 */}
-      <div style={{ marginBottom: 40 }}>
+      {/* 互动足迹 */}
+      <div style={{ marginBottom: 40, maxWidth: HOME_CONTENT_MAX_WIDTH }}>
         <Text
           style={{
             fontSize: 13,
@@ -150,7 +160,7 @@ const Home: React.FC = () => {
             marginBottom: 16,
           }}
         >
-          创作统计
+          互动足迹
         </Text>
         <Card
           style={{
@@ -168,51 +178,27 @@ const Home: React.FC = () => {
             <>
               {/* 统计数字 */}
               <Row gutter={[48, 24]} style={{ marginBottom: 20 }}>
-                <Col>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={HOME_STAT_ICON_STYLE}>
-                      <FileTextOutlined />
+                {interactionStats.map((item) => (
+                  <Col key={item.label}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={HOME_STAT_ICON_STYLE}>
+                        {item.icon}
+                      </div>
+                      <div>
+                        <Text style={{ fontSize: 28, fontWeight: 600, color: '#33312e', lineHeight: 1.2, display: 'block' }}>
+                          {formatNumber(item.value)}
+                        </Text>
+                        <Text style={{ fontSize: 12, color: '#b0a99e' }}>{item.label}</Text>
+                      </div>
                     </div>
-                    <div>
-                      <Text style={{ fontSize: 28, fontWeight: 600, color: '#33312e', lineHeight: 1.2, display: 'block' }}>
-                        {formatNumber(stats?.totalWorks ?? 0)}
-                      </Text>
-                      <Text style={{ fontSize: 12, color: '#b0a99e' }}>作品总数</Text>
-                    </div>
-                  </div>
-                </Col>
-                <Col>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={HOME_STAT_ICON_STYLE}>
-                      <FontSizeOutlined />
-                    </div>
-                    <div>
-                      <Text style={{ fontSize: 28, fontWeight: 600, color: '#33312e', lineHeight: 1.2, display: 'block' }}>
-                        {formatNumber(stats?.totalWordCount ?? 0)}
-                      </Text>
-                      <Text style={{ fontSize: 12, color: '#b0a99e' }}>总字数</Text>
-                    </div>
-                  </div>
-                </Col>
-                <Col>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={HOME_STAT_ICON_STYLE}>
-                      <FireOutlined />
-                    </div>
-                    <div>
-                      <Text style={{ fontSize: 28, fontWeight: 600, color: '#33312e', lineHeight: 1.2, display: 'block' }}>
-                        {activeDays}
-                      </Text>
-                      <Text style={{ fontSize: 12, color: '#b0a99e' }}>近30天活跃</Text>
-                    </div>
-                  </div>
-                </Col>
+                  </Col>
+                ))}
               </Row>
 
               {/* 30天热力图 */}
               <div>
                 <Text style={{ fontSize: 12, color: '#b0a99e', marginBottom: 10, display: 'block' }}>
-                  近30天写作活跃度
+                  近30天互动活跃度
                 </Text>
                 <div
                   style={{
@@ -223,7 +209,7 @@ const Home: React.FC = () => {
                   }}
                 >
                   {stats?.dailyActivity.map((day) => (
-                    <Tooltip key={day.date} title={`${day.date} · 修改 ${day.count} 个作品`}>
+                    <Tooltip key={day.date} title={`${day.date} · 互动 ${day.count} 次`}>
                       <div
                         style={{
                           width: '100%',
@@ -256,7 +242,12 @@ const Home: React.FC = () => {
 
 
       {/* 快捷入口卡片 */}
-      <div>
+      <div
+        style={{
+          maxWidth: HOME_INTERACTION_CONTENT_WIDTH,
+          marginLeft: HOME_CARD_BODY_INLINE_PADDING,
+        }}
+      >
         <Text
           style={{
             fontSize: 13,
@@ -272,7 +263,7 @@ const Home: React.FC = () => {
         </Text>
         <Row gutter={[16, 16]}>
           {writingModules.map((mod) => (
-            <Col key={mod.key} xs={12} sm={8} md={6} lg={4}>
+            <Col key={mod.key} xs={12} sm={8} md={6} lg={6}>
               <Card
                 hoverable
                 onClick={() => navigate(mod.key)}
@@ -306,7 +297,7 @@ const Home: React.FC = () => {
         </Text>
         <Row gutter={[16, 16]}>
           {companionModules.map((mod) => (
-            <Col key={mod.key} xs={12} sm={8} md={6} lg={4}>
+            <Col key={mod.key} xs={12} sm={8} md={6} lg={6}>
               <Card
                 hoverable
                 onClick={() => navigate(mod.key)}

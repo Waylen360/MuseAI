@@ -10,7 +10,7 @@ describe('Settings background page configuration', () => {
     expect(screen.getByLabelText('AI 提取背景设定并发数')).toBeInTheDocument();
     expect(screen.getByText('提取世界书')).toBeInTheDocument();
     expect(screen.getByText('提取角色卡')).toBeInTheDocument();
-    expect(screen.getAllByText('温度 (Temperature)').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('温度').length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText('最大上下文 Token').length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText('思考深度 (Depth)').length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText('系统提示词 (System Prompt)').length).toBeGreaterThanOrEqual(2);

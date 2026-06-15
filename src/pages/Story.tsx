@@ -405,6 +405,7 @@ const useStoryView = () => {
       temperature?: number;
       maxOutputTokens?: number;
       maxContextTokens?: number;
+      compactionTurnThreshold?: number;
       thinkingDepth?: string;
     },
     materials: {
@@ -698,6 +699,7 @@ const useStoryView = () => {
     temperature: 0.3,
     maxOutputTokens: 32000,
     maxContextTokens: 200000,
+    compactionTurnThreshold: 20,
     thinkingDepth: 'off',
   };
   const isActiveBookTravelScene = bookTravelStore.scenes.length > 0;
@@ -1349,10 +1351,12 @@ const useStoryView = () => {
       const modelMessages = buildStoryModelMessages(nextMessages.slice(0, -1));
       const runId = await invoke<string>('start_chat_completion_stream', {
         request: {
+          agentId: storyAgentConfigId,
           modelInterface: settings.modelInterface, baseUrl: settings.llmBaseUrl, apiKey: settings.llmApiKey,
           model: settings.llmModel, temperature: storyAgentConfig.temperature ?? 0.3,
           maxOutputTokens: storyAgentConfig.maxOutputTokens ?? 32000,
           maxContextTokens: storyAgentConfig.maxContextTokens ?? 200000,
+          compactionTurnThreshold: storyAgentConfig.compactionTurnThreshold ?? 20,
           thinkingDepth: storyAgentConfig.thinkingDepth ?? 'off',
           systemPrompt: effectiveSystemPrompt, workspacePath: null, messages: modelMessages,
           contextCompaction: contextCompactionRef.current, selectedReferenceFiles: [],

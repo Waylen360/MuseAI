@@ -85,9 +85,13 @@ pub struct ContextCompactionPlan {
 pub enum ContextSummaryStyle {
     Generic,
     PartnerChat,
+    StoryAgent,
 }
 
 pub const PARTNER_CHAT_AGENT_ID: &str = "partnerChat";
+pub const STORY_AGENT_ID: &str = "storyAgent";
+pub const STORY_DYNAMIC_AGENT_ID: &str = "storyDynamicAgent";
+const DEFAULT_COMPACTION_TURN_THRESHOLD: u32 = 20;
 
 pub fn should_compact_context(
     system_prompt: &str,
@@ -134,6 +138,7 @@ pub fn plan_context_compaction_for_agent(
     existing_compaction: Option<&SessionContextCompaction>,
     max_context_tokens: Option<u32>,
     agent_id: Option<&str>,
+    compaction_turn_threshold: Option<u32>,
 ) -> Option<ContextCompactionPlan> {
     let effective_history = effective_history_with_compaction(history, existing_compaction);
     let reaches_context_threshold =
@@ -141,21 +146,31 @@ pub fn plan_context_compaction_for_agent(
     let compact_from = existing_compaction
         .map(|compaction| compaction_boundary_suffix_start(history, compaction))
         .unwrap_or(0);
-    let partner_chat_boundary = if agent_id == Some(PARTNER_CHAT_AGENT_ID) {
-        select_partner_chat_turn_boundary(history)
-    } else {
-        None
-    }
-    .filter(|boundary| {
-        *boundary >= compact_from && history.len().saturating_sub(*boundary + 1) >= 2
-    });
+    let turn_summary_style = match agent_id {
+        Some(PARTNER_CHAT_AGENT_ID) => Some(ContextSummaryStyle::PartnerChat),
+        Some(STORY_AGENT_ID) | Some(STORY_DYNAMIC_AGENT_ID) => {
+            Some(ContextSummaryStyle::StoryAgent)
+        }
+        _ => None,
+    };
+    let turn_threshold = compaction_turn_threshold
+        .filter(|value| *value >= 2)
+        .unwrap_or(DEFAULT_COMPACTION_TURN_THRESHOLD);
+    let turn_based_boundary = turn_summary_style
+        .and_then(|_| select_turn_based_compaction_boundary(history, turn_threshold))
+        .filter(|boundary| {
+            *boundary >= compact_from && history.len().saturating_sub(*boundary + 1) >= 2
+        });
 
-    if !reaches_context_threshold && partner_chat_boundary.is_none() {
+    if !reaches_context_threshold && turn_based_boundary.is_none() {
         return None;
     }
 
-    let (boundary, summary_style) = if let Some(boundary) = partner_chat_boundary {
-        (boundary, ContextSummaryStyle::PartnerChat)
+    let (boundary, summary_style) = if let Some(boundary) = turn_based_boundary {
+        (
+            boundary,
+            turn_summary_style.unwrap_or(ContextSummaryStyle::Generic),
+        )
     } else {
         (
             select_compaction_boundary(system_prompt, history, max_context_tokens)?,
@@ -195,8 +210,10 @@ pub fn fallback_context_summary_with_style(
     messages: &[ChatMessage],
     summary_style: ContextSummaryStyle,
 ) -> String {
-    if summary_style == ContextSummaryStyle::PartnerChat {
-        return fallback_partner_chat_summary(messages);
+    match summary_style {
+        ContextSummaryStyle::PartnerChat => return fallback_partner_chat_summary(messages),
+        ContextSummaryStyle::StoryAgent => return fallback_story_summary(messages),
+        ContextSummaryStyle::Generic => {}
     }
 
     let mut user_snippets = Vec::new();
@@ -283,6 +300,13 @@ pub fn context_summary_system_prompt(summary_style: ContextSummaryStyle) -> &'st
             "必须删除重复寒暄、重复安抚、重复动作描写和没有新增信息的闲聊。\n",
             "输出只给摘要正文，不要回答用户，不要新增事实。"
         ),
+        ContextSummaryStyle::StoryAgent => concat!(
+            "请把这段 MuseAI 跑团/文字冒险的旧上下文压缩成可继续推进剧情的中文摘要。\n",
+            "必须按以下四个方面组织信息：当前剧情进度、世界与 NPC 状态、角色关系变化、未解决的伏笔与悬念。\n",
+            "必须保留关键选择、因果后果、场景位置、阵营变化、NPC 目标、道具线索和影响后续冒险的承诺或冲突。\n",
+            "必须删除冗长旁白、重复场景描写、重复动作描写和没有新增信息的气氛渲染。\n",
+            "输出只给摘要正文，不要回答用户，不要新增事实。"
+        ),
     }
 }
 
@@ -337,12 +361,63 @@ fn fallback_partner_chat_summary(messages: &[ChatMessage]) -> String {
     )
 }
 
-fn select_partner_chat_turn_boundary(history: &[ChatMessage]) -> Option<usize> {
+fn fallback_story_summary(messages: &[ChatMessage]) -> String {
+    let mut user_snippets = Vec::new();
+    let mut assistant_snippets = Vec::new();
+    for message in messages {
+        let text = message.content.trim();
+        if text.is_empty() {
+            continue;
+        }
+        if message.role == "user" {
+            user_snippets.push(truncate_for_summary_line(text, 120));
+        } else if message.role == "assistant" {
+            assistant_snippets.push(truncate_for_summary_line(text, 120));
+        }
+    }
+
+    let recent_user = user_snippets
+        .iter()
+        .rev()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("；");
+    let recent_assistant = assistant_snippets
+        .iter()
+        .rev()
+        .take(2)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("；");
+
+    format!(
+        "当前剧情进度：{}。\n世界与 NPC 状态：压缩摘要生成失败；请根据最近原文保持已建立的世界状态与 NPC 行动逻辑。\n角色关系变化：{}。\n未解决的伏笔与悬念：继续承接用户最近选择造成的后果与尚未揭开的线索。",
+        if recent_assistant.is_empty() {
+            "旧上下文没有可稳定提取的剧情进展".to_string()
+        } else {
+            recent_assistant
+        },
+        if recent_user.is_empty() {
+            "旧上下文没有可稳定提取的角色互动".to_string()
+        } else {
+            recent_user
+        }
+    )
+}
+
+fn select_turn_based_compaction_boundary(history: &[ChatMessage], threshold: u32) -> Option<usize> {
     let user_turns = history
         .iter()
         .filter(|message| message.role.as_str() == "user")
         .count();
-    if user_turns <= 20 {
+    if user_turns <= threshold.max(2) as usize {
         return None;
     }
 
@@ -946,15 +1021,21 @@ mod tests {
     fn non_partner_chat_plan_ignores_turn_count_below_context_threshold() {
         let history = partner_chat_pairs(21);
 
-        let plan =
-            plan_context_compaction_for_agent("", &history, None, Some(100_000), Some("writer"));
+        let plan = plan_context_compaction_for_agent(
+            "",
+            &history,
+            None,
+            Some(100_000),
+            Some("writer"),
+            None,
+        );
 
         assert!(plan.is_none());
     }
 
     #[test]
-    fn partner_chat_plan_compacts_after_twenty_user_turns() {
-        let history = partner_chat_pairs(21);
+    fn partner_chat_plan_compacts_after_configured_turn_threshold() {
+        let history = partner_chat_pairs(13);
 
         let plan = plan_context_compaction_for_agent(
             "",
@@ -962,11 +1043,12 @@ mod tests {
             None,
             Some(100_000),
             Some(PARTNER_CHAT_AGENT_ID),
+            Some(12),
         )
         .unwrap();
 
         assert_eq!(plan.summary_style, ContextSummaryStyle::PartnerChat);
-        assert_eq!(plan.compacted_through_message_id.as_deref(), Some("a16"));
+        assert_eq!(plan.compacted_through_message_id.as_deref(), Some("a8"));
     }
 
     #[test]
@@ -978,10 +1060,12 @@ mod tests {
             None,
             Some(100_000),
             Some(PARTNER_CHAT_AGENT_ID),
+            None,
         )
         .unwrap();
         let compaction = SessionContextCompaction {
-            summary: "关系状态：稳定\n已发生事件：旧事\n用户偏好：慢聊\n未解决话题：继续".to_string(),
+            summary: "关系状态：稳定\n已发生事件：旧事\n用户偏好：慢聊\n未解决话题：继续"
+                .to_string(),
             compacted_through_message_id: plan.compacted_through_message_id,
             compacted_through_index: plan.compacted_through_index,
             source_message_count: history.len(),
@@ -1015,6 +1099,77 @@ mod tests {
             None,
             Some(100_000),
             Some(PARTNER_CHAT_AGENT_ID),
+            None,
+        );
+
+        assert!(plan.is_none());
+    }
+
+    #[test]
+    fn story_agents_use_turn_based_compaction_with_story_summary_style() {
+        for agent_id in [STORY_AGENT_ID, STORY_DYNAMIC_AGENT_ID] {
+            let history = partner_chat_pairs(16);
+            let plan = plan_context_compaction_for_agent(
+                "",
+                &history,
+                None,
+                Some(100_000),
+                Some(agent_id),
+                Some(15),
+            )
+            .unwrap();
+
+            assert_eq!(plan.summary_style, ContextSummaryStyle::StoryAgent);
+            assert_eq!(plan.compacted_through_message_id.as_deref(), Some("a11"));
+        }
+    }
+
+    #[test]
+    fn story_dynamic_turn_count_ignores_tool_and_assistant_messages() {
+        let mut history = partner_chat_pairs(18);
+        history.push(msg("assistant-extra", "assistant", "旁白继续"));
+        history.push(tool_result("tool-extra", "role_play_1", "角色发言"));
+
+        let plan = plan_context_compaction_for_agent(
+            "",
+            &history,
+            None,
+            Some(100_000),
+            Some(STORY_DYNAMIC_AGENT_ID),
+            Some(20),
+        );
+
+        assert!(plan.is_none());
+    }
+
+    #[test]
+    fn turn_threshold_defaults_to_twenty_when_missing_or_too_small() {
+        for threshold in [None, Some(0), Some(1)] {
+            let history = partner_chat_pairs(21);
+            let plan = plan_context_compaction_for_agent(
+                "",
+                &history,
+                None,
+                Some(100_000),
+                Some(PARTNER_CHAT_AGENT_ID),
+                threshold,
+            )
+            .unwrap();
+
+            assert_eq!(plan.compacted_through_message_id.as_deref(), Some("a16"));
+        }
+    }
+
+    #[test]
+    fn turn_threshold_does_not_compact_below_configured_value() {
+        let history = partner_chat_pairs(25);
+        let plan = plan_context_compaction_for_agent(
+            "",
+            &history,
+            None,
+            Some(100_000),
+            Some(PARTNER_CHAT_AGENT_ID),
+            Some(30),
         );
 
         assert!(plan.is_none());
@@ -1028,6 +1183,25 @@ mod tests {
         assert!(prompt.contains("已发生事件"));
         assert!(prompt.contains("用户偏好"));
         assert!(prompt.contains("未解决话题"));
+    }
+
+    #[test]
+    fn story_summary_prompt_and_fallback_are_story_oriented() {
+        let prompt = context_summary_system_prompt(ContextSummaryStyle::StoryAgent);
+        let summary = fallback_context_summary_with_style(
+            &[
+                msg("u1", "user", "我决定进入旧钟楼寻找失踪的妹妹"),
+                msg("a1", "assistant", "钟楼里传来脚步声，守夜人提到银钥匙"),
+            ],
+            ContextSummaryStyle::StoryAgent,
+        );
+
+        assert!(prompt.contains("当前剧情进度"));
+        assert!(prompt.contains("世界与 NPC 状态"));
+        assert!(prompt.contains("未解决的伏笔与悬念"));
+        assert!(summary.contains("当前剧情进度"));
+        assert!(summary.contains("世界与 NPC 状态"));
+        assert!(summary.contains("未解决的伏笔与悬念"));
     }
 
     #[test]
@@ -1048,7 +1222,8 @@ mod tests {
             msg("a3", "assistant", "ok"),
         ];
 
-        let plan = plan_context_compaction_for_agent("", &history, None, Some(140), None).unwrap();
+        let plan =
+            plan_context_compaction_for_agent("", &history, None, Some(140), None, None).unwrap();
         let compacted = SessionContextCompaction {
             summary: "摘要".to_string(),
             compacted_through_message_id: plan.compacted_through_message_id,
@@ -1108,7 +1283,7 @@ mod tests {
         };
 
         let plan =
-            plan_context_compaction_for_agent("", &history, Some(&existing), Some(140), None)
+            plan_context_compaction_for_agent("", &history, Some(&existing), Some(140), None, None)
                 .unwrap();
 
         assert!(plan.messages_to_summarize[0].content.contains("第一轮摘要"));

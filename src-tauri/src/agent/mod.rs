@@ -368,6 +368,7 @@ async fn prepare_session_context_compaction(
         request.context_compaction.as_ref(),
         request.max_context_tokens,
         request.agent_id.as_deref(),
+        request.compaction_turn_threshold,
     ) else {
         return Ok(request.context_compaction.clone());
     };

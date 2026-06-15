@@ -366,6 +366,7 @@ const useMobileChatView = () => {
           temperature: settings.agentConfigs?.partnerChat?.temperature ?? 0.3,
           maxOutputTokens: settings.agentConfigs?.partnerChat?.maxOutputTokens ?? 32000,
           maxContextTokens: settings.agentConfigs?.partnerChat?.maxContextTokens ?? 200000,
+          compactionTurnThreshold: settings.agentConfigs?.partnerChat?.compactionTurnThreshold ?? 20,
           thinkingDepth: settings.agentConfigs?.partnerChat?.thinkingDepth ?? 'off',
           systemPrompt,
           messages: modelMessages,

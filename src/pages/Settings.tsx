@@ -136,45 +136,58 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
   const [form] = Form.useForm();
   const defaultConfig = React.useMemo(() => defaultAgentConfigs[agentId] || {}, [agentId]);
   const agentConfig = store.agentConfigs?.[agentId] || defaultConfig;
+  const supportsCompactionTurnThreshold = agentId === 'partnerChat' || agentId === 'storyAgent' || agentId === 'storyDynamicAgent';
 
   React.useEffect(() => {
-    form.setFieldsValue({
+    const values: Record<string, unknown> = {
       temperature: agentConfig.temperature ?? defaultConfig.temperature ?? 0.3,
       maxOutputTokens: agentConfig.maxOutputTokens ?? defaultConfig.maxOutputTokens ?? 32000,
       maxContextTokens: agentConfig.maxContextTokens ?? defaultConfig.maxContextTokens ?? 200000,
       thinkingDepth: agentConfig.thinkingDepth ?? defaultConfig.thinkingDepth ?? 'off',
       prompt: currentPrompt,
-    });
-  }, [agentConfig, currentPrompt, defaultConfig, form]);
+    };
+    if (supportsCompactionTurnThreshold) {
+      values.compactionTurnThreshold = agentConfig.compactionTurnThreshold ?? defaultConfig.compactionTurnThreshold ?? 20;
+    }
+    form.setFieldsValue(values);
+  }, [agentConfig, currentPrompt, defaultConfig, form, supportsCompactionTurnThreshold]);
 
   const handleSave = (values: any) => {
     if (showModelControls) {
-      store.setAgentConfig(agentId, {
+      const nextConfig = {
         temperature: values.temperature,
         maxOutputTokens: values.maxOutputTokens,
         maxContextTokens: values.maxContextTokens,
         thinkingDepth: values.thinkingDepth,
-      });
+        ...(supportsCompactionTurnThreshold ? { compactionTurnThreshold: values.compactionTurnThreshold ?? 20 } : {}),
+      };
+      store.setAgentConfig(agentId, nextConfig);
     }
     onSavePrompt(values.prompt);
     message.success(`已保存 ${title} 配置`);
   };
 
   const handleReset = () => {
-    form.setFieldsValue({
+    const values: Record<string, unknown> = {
       temperature: defaultConfig.temperature ?? 0.3,
       maxOutputTokens: defaultConfig.maxOutputTokens ?? 32000,
       maxContextTokens: defaultConfig.maxContextTokens ?? 200000,
       thinkingDepth: defaultConfig.thinkingDepth ?? 'off',
       prompt: defaultPrompt,
-    });
+    };
+    if (supportsCompactionTurnThreshold) {
+      values.compactionTurnThreshold = defaultConfig.compactionTurnThreshold ?? 20;
+    }
+    form.setFieldsValue(values);
     if (showModelControls) {
-      store.setAgentConfig(agentId, {
+      const nextConfig = {
         temperature: defaultConfig.temperature,
         maxOutputTokens: defaultConfig.maxOutputTokens,
         maxContextTokens: defaultConfig.maxContextTokens,
         thinkingDepth: defaultConfig.thinkingDepth,
-      });
+        ...(supportsCompactionTurnThreshold ? { compactionTurnThreshold: defaultConfig.compactionTurnThreshold ?? 20 } : {}),
+      };
+      store.setAgentConfig(agentId, nextConfig);
     }
     onResetPrompt();
     message.success(`已恢复 ${title} 默认配置`);
@@ -214,8 +227,15 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
         requiredMark={false}
       >
         {showModelControls && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '16px', marginBottom: '20px' }}>
-            <Form.Item label="温度 (Temperature)" name="temperature" style={{ marginBottom: 0 }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: supportsCompactionTurnThreshold ? 'repeat(5, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
+              gap: '16px',
+              marginBottom: '20px'
+            }}
+          >
+            <Form.Item label="温度" name="temperature" style={{ marginBottom: 0 }}>
               <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item label="最大输出 Token" name="maxOutputTokens" style={{ marginBottom: 0 }}>
@@ -230,6 +250,16 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
                 options={effortLevelOptions.map((opt) => ({ value: opt.id, label: opt.label }))}
               />
             </Form.Item>
+            {supportsCompactionTurnThreshold && (
+              <Form.Item
+                label="自动压缩轮数"
+                name="compactionTurnThreshold"
+                tooltip="控制用户对话轮数超过多少后，后端自动压缩早期上下文。默认 20；数值越大，保留原文越久，但 Token 成本更高。"
+                style={{ marginBottom: 0 }}
+              >
+                <InputNumber min={2} max={200} step={1} style={{ width: '100%' }} />
+              </Form.Item>
+            )}
           </div>
         )}
 
@@ -905,7 +935,7 @@ const useSettingsView = () => {
             </div>
 
             <AgentSettingCard
-              title="聊天 Agent"
+              title="伴侣对谈师"
               agentId="partnerChat"
               defaultPrompt={defaultPartnerChatPrompt}
               currentPrompt={store.partnerChatPrompt}
@@ -925,7 +955,7 @@ const useSettingsView = () => {
             </div>
 
             <AgentSettingCard
-              title="冒险 Agent（非动态加载）"
+              title="冒险主持人（非动态加载）"
               agentId="storyAgent"
               defaultPrompt={defaultStoryAgentPrompt}
               currentPrompt={store.storyAgentPrompt}
@@ -935,7 +965,7 @@ const useSettingsView = () => {
             />
 
             <AgentSettingCard
-              title="冒险 Agent（角色卡动态加载）"
+              title="冒险主持人（角色卡动态加载）"
               agentId="storyDynamicAgent"
               defaultPrompt={defaultStoryDynamicAgentPrompt}
               currentPrompt={store.storyDynamicAgentPrompt}
@@ -955,7 +985,7 @@ const useSettingsView = () => {
             </div>
 
             <AgentSettingCard
-              title="聊天页-封存记忆 Agent"
+              title="聊天页-记忆封存师"
               agentId="chatArchive"
               defaultPrompt={defaultChatArchivePrompt}
               currentPrompt={store.chatArchivePrompt}
@@ -965,7 +995,7 @@ const useSettingsView = () => {
             />
 
             <AgentSettingCard
-              title="冒险页-封存记忆 Agent"
+              title="冒险页-记忆封存师"
               agentId="storyArchive"
               defaultPrompt={defaultStoryArchivePrompt}
               currentPrompt={store.storyArchivePrompt}

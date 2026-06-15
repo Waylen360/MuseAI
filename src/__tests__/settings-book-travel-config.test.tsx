@@ -14,7 +14,7 @@ describe('Settings book-travel page configuration', () => {
     expect(screen.getByText('穿书场景写手')).toBeInTheDocument();
     expect(screen.getByText('穿书记忆整理员')).toBeInTheDocument();
     expect(screen.getByText('穿书结局裁判')).toBeInTheDocument();
-    expect(screen.getAllByText('温度 (Temperature)').length).toBeGreaterThanOrEqual(6);
+    expect(screen.getAllByText('温度').length).toBeGreaterThanOrEqual(6);
     expect(screen.getAllByText('最大输出 Token').length).toBeGreaterThanOrEqual(6);
     expect(screen.getAllByText('最大上下文 Token').length).toBeGreaterThanOrEqual(6);
     expect(screen.getAllByText('思考深度 (Depth)').length).toBeGreaterThanOrEqual(6);
