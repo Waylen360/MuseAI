@@ -40,11 +40,6 @@ pub fn bash_permission_channels() -> &'static Mutex<HashMap<String, oneshot::Sen
 pub struct ActiveStreams(Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>);
 
 #[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
-#[tauri::command]
 fn rename_item(path: String, new_name: String) -> Result<(), String> {
     fs_commands::rename_item_cmd(path, new_name)
 }
@@ -191,7 +186,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            greet,
             list_dir,
             read_file,
             read_image_data_url,
