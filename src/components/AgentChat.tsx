@@ -821,7 +821,7 @@ const useAgentChatView = ({ onClose, title = '写文章Agent' }: AgentChatProps)
                       <div className="agent-session-menu-item" style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%', minWidth: 180, padding: '4px 0' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', marginRight: 16 }}>
                           <strong style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{session.title}</strong>
-                          <span style={{ fontSize: '11px', color: '#999', marginTop: 2 }}>{formatSavedAt(session.savedAt)}</span>
+                          <span style={{ fontSize: '12px', color: '#999', marginTop: 2 }}>{formatSavedAt(session.savedAt)}</span>
                         </div>
                         <Button
                           type="text"

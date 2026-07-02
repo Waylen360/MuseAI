@@ -362,15 +362,15 @@ const MobileBondRelationCard: React.FC<{ character: PartnerItem }> = ({ characte
   <Card title={<span style={{ color: '#d97757', fontWeight: 600 }}><HeartOutlined /> 关系概览</span>} size="small" style={{ borderRadius: '12px', border: '1px solid rgba(217, 119, 87, 0.05)' }}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
       <div>
-        <div style={{ fontSize: '11px', color: '#8c8880', marginBottom: '2px' }}>关系类型</div>
+        <div style={{ fontSize: '12px', color: '#8c8880', marginBottom: '2px' }}>关系类型</div>
         <div style={{ fontSize: '13px', color: '#d97757', fontWeight: 600 }}>{character.fields?.userRelationType || '尚未设定'}</div>
       </div>
       <div>
-        <div style={{ fontSize: '11px', color: '#8c8880', marginBottom: '2px' }}><LinkOutlined style={{ marginRight: '4px' }} />相处模式</div>
+        <div style={{ fontSize: '12px', color: '#8c8880', marginBottom: '2px' }}><LinkOutlined style={{ marginRight: '4px' }} />相处模式</div>
         <div style={{ fontSize: '13px', color: '#33312e', lineHeight: 1.5 }}>{character.fields?.userInteractionModel || '尚未设定'}</div>
       </div>
       <div>
-        <div style={{ fontSize: '11px', color: '#8c8880', marginBottom: '2px' }}><SafetyOutlined style={{ marginRight: '4px' }} />关系底线</div>
+        <div style={{ fontSize: '12px', color: '#8c8880', marginBottom: '2px' }}><SafetyOutlined style={{ marginRight: '4px' }} />关系底线</div>
         <div style={{ fontSize: '13px', color: '#33312e', lineHeight: 1.5 }}>{character.fields?.userRelationBottomLine || '尚未设定'}</div>
       </div>
     </div>
@@ -456,7 +456,7 @@ const MobileBondHistoryItem: React.FC<{
         <span style={{ fontSize: '13px', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.title}</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <span style={{ fontSize: '11px', color: '#bfbfbf' }}>{formatDate(session.savedAt)}</span>
+        <span style={{ fontSize: '12px', color: '#bfbfbf' }}>{formatDate(session.savedAt)}</span>
         <EyeOutlined style={{ fontSize: '12px', color: expanded ? '#d97757' : '#bfbfbf' }} />
       </div>
     </button>

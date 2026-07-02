@@ -1470,13 +1470,14 @@ const useAdventureView = () => {
                             contentToRender = contentToRender.replace(choicesMatch[0], '');
                             try {
                               choices = JSON.parse(choicesMatch[1]);
-                            } catch (e) {}
+                            } catch (e) { }
                           }
 
                           const parts = contentToRender.split(/(\[\[(?:TOOL|THINKING):[^\]]+\]\])/);
                           const renderedToolIds = new Set<string>();
                           const getMarkdownPartKey = createStableContentKey(`${msg.id}-md`);
                           const getToolKey = createStableToolKey(`${msg.id}-tool`);
+                          const getChoiceKey = createStableContentKey(`${msg.id}-choice`);
 
                           const renderedParts = parts.map((part) => {
                             const toolMatch = part.match(/^\[\[TOOL:([^\]]+)\]\]$/);
@@ -1542,9 +1543,9 @@ const useAdventureView = () => {
                               {unrenderedTools}
                               {choices.length > 0 && !isSessionArchived && isLastAgent && (
                                 <div className="book-travel-suggested-choices" style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                  {choices.map((choice, i) => (
+                                  {choices.map((choice) => (
                                     <Button
-                                      key={`choice-${i}`}
+                                      key={getChoiceKey(choice)}
                                       type="dashed"
                                       style={{ textAlign: 'left', height: 'auto', padding: '8px 12px', whiteSpace: 'normal', color: '#d97757', borderColor: '#d97757' }}
                                       onClick={() => {

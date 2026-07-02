@@ -132,6 +132,8 @@ export interface BookTravelSnapshot {
   summaryMemory: string;
   isCompleted: boolean;
   ending: BookTravelEnding | null;
+  input: string;
+  inputMode: 'speech' | 'behavior' | 'plot';
 }
 
 interface BookTravelState extends BookTravelSnapshot {
@@ -139,6 +141,8 @@ interface BookTravelState extends BookTravelSnapshot {
   assembledMaterials: BookTravelAssembledMaterial[];
   selectedMaterialId: string | null;
   savedProgresses: BookTravelSavedProgress[];
+  setInput: (input: string) => void;
+  setInputMode: (mode: 'speech' | 'behavior' | 'plot') => void;
   selectOutline: (outline: BookTravelMaterial | null) => void;
   selectWorldBook: (worldBook: BookTravelMaterial | null) => void;
   setSelectedCharacterCards: (characterCards: BookTravelMaterial[]) => void;
@@ -211,6 +215,8 @@ const initialState = {
   summaryMemory: '',
   isCompleted: false,
   ending: null,
+  input: '',
+  inputMode: 'speech' as 'speech' | 'behavior' | 'plot',
   streamRuntime: initialStreamRuntime,
 };
 
@@ -239,6 +245,8 @@ export const useBookTravelStore = create<BookTravelState>()(
       selectedMaterialId: null,
       savedProgresses: [],
 
+      setInput: (input) => set({ input }),
+      setInputMode: (inputMode) => set({ inputMode }),
       selectOutline: (selectedOutline) => set({ selectedOutline }),
       selectWorldBook: (selectedWorldBook) => set({ selectedWorldBook }),
       setSelectedCharacterCards: (selectedCharacterCards) => set({ selectedCharacterCards }),
@@ -444,5 +452,7 @@ const getBookTravelSnapshot = (): BookTravelSnapshot => {
     summaryMemory: state.summaryMemory,
     isCompleted: state.isCompleted,
     ending: state.ending,
+    input: state.input,
+    inputMode: state.inputMode,
   };
 };

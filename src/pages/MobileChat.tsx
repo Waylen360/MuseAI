@@ -863,7 +863,7 @@ const useMobileChatView = () => {
                 </div>
               )}
               {isSessionArchived && (
-                <div style={{ fontSize: '11px', color: '#8c8880', textAlign: 'center', display: 'flex', justifyContent: 'center', gap: '4px', alignItems: 'center' }}>
+                <div style={{ fontSize: '12px', color: '#8c8880', textAlign: 'center', display: 'flex', justifyContent: 'center', gap: '4px', alignItems: 'center' }}>
                   <HistoryOutlined />
                   <span>此对话已归档封存，记忆已存入角色卡</span>
                 </div>

@@ -2240,7 +2240,7 @@ const useBackgroundView = () => {
                   {selectedItem.name}
                 </span>
                 <span style={{ 
-                  fontSize: 10, 
+                  fontSize: 12,
                   background: '#f2e8dc', 
                   color: '#d97757', 
                   padding: '2px 8px', 
@@ -2293,7 +2293,7 @@ const useBackgroundView = () => {
                     }}
                   >
                     <Space size={4}>
-                      <EditFilled style={{ fontSize: 11 }} />
+                      <EditFilled style={{ fontSize: 12 }} />
                       <span>编辑配置</span>
                     </Space>
                   </Radio.Button>
@@ -2309,7 +2309,7 @@ const useBackgroundView = () => {
                     }}
                   >
                     <Space size={4}>
-                      <EyeOutlined style={{ fontSize: 11 }} />
+                      <EyeOutlined style={{ fontSize: 12 }} />
                       <span>效果预览</span>
                     </Space>
                   </Radio.Button>

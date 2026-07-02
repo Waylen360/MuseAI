@@ -60,7 +60,7 @@ const MobileShell: React.FC = () => {
               <div style={{ fontSize: '20px', marginBottom: '2px' }}>
                 {item.icon}
               </div>
-              <span style={{ fontSize: '11px', fontWeight: isActive ? 600 : 400 }}>
+              <span style={{ fontSize: '12px', fontWeight: isActive ? 600 : 400 }}>
                 {item.label}
               </span>
             </button>

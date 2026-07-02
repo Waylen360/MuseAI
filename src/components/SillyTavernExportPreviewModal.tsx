@@ -1,6 +1,7 @@
 import React from 'react';
 import { Modal, Button, Spin, Typography, Tag, Descriptions, Alert, Space } from 'antd';
 import { CheckOutlined, ReloadOutlined } from '@ant-design/icons';
+import { createStableContentKey } from '../utils/renderKeys';
 
 const { Text, Paragraph } = Typography;
 
@@ -65,7 +66,8 @@ export const SillyTavernExportPreviewModal: React.FC<SillyTavernExportPreviewMod
   onRetry,
   onCancel,
 }) => {
-  const preview = cardJson ? parsePreviewData(cardJson) : null;
+  const preview = React.useMemo(() => (cardJson ? parsePreviewData(cardJson) : null), [cardJson]);
+  const getPreviewTagKey = createStableContentKey('silly-tavern-preview-tag');
 
   return (
     <Modal
@@ -139,8 +141,8 @@ export const SillyTavernExportPreviewModal: React.FC<SillyTavernExportPreviewMod
                 label: '标签',
                 children: (
                   <Space size={4} wrap>
-                    {preview.tags.map((tag, i) => (
-                      <Tag key={i} style={{ fontSize: 11 }}>{tag}</Tag>
+                    {preview.tags.map((tag) => (
+                      <Tag key={getPreviewTagKey(tag)} style={{ fontSize: 12 }}>{tag}</Tag>
                     ))}
                   </Space>
                 ),

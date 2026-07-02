@@ -96,7 +96,7 @@ const RelationOverview: React.FC<{ item: PartnerItem }> = ({ item }) => {
         </div>
         <div>
           <div className="input-label">
-            <LinkOutlined style={{ fontSize: 11, marginRight: 4 }} />
+            <LinkOutlined style={{ fontSize: 12, marginRight: 4 }} />
             相处模式
           </div>
           <div
@@ -112,7 +112,7 @@ const RelationOverview: React.FC<{ item: PartnerItem }> = ({ item }) => {
         </div>
         <div>
           <div className="input-label">
-            <SafetyOutlined style={{ fontSize: 11, marginRight: 4 }} />
+            <SafetyOutlined style={{ fontSize: 12, marginRight: 4 }} />
             关系底线
           </div>
           <div
@@ -383,7 +383,7 @@ const SessionHistory: React.FC<SessionHistoryProps> = ({
                             </div>
                             <span
                               style={{
-                                fontSize: 11,
+                                fontSize: 12,
                                 color: '#bfbfbf',
                                 marginTop: 4,
                               }}
@@ -539,7 +539,7 @@ const AdventureHistory: React.FC<AdventureHistoryProps> = ({
                             </div>
                             <span
                               style={{
-                                fontSize: 11,
+                                fontSize: 12,
                                 color: '#bfbfbf',
                                 marginTop: 4,
                               }}

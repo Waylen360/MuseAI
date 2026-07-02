@@ -15,6 +15,7 @@ describe('Runtime Utility & Bridge', () => {
   beforeEach(() => {
     (globalThis as any).__TEST_MOBILE_BYPASS__ = true;
     localStorage.clear();
+    sessionStorage.clear();
     // Setup clean window location
     delete (window as any).__TAURI_INTERNALS__;
     delete (window as any).__TAURI__;
@@ -30,13 +31,16 @@ describe('Runtime Utility & Bridge', () => {
       writable: true,
       configurable: true,
     });
+    clearMobileToken();
   });
 
   afterEach(() => {
+    clearMobileToken();
     (globalThis as any).__TEST_MOBILE_BYPASS__ = false;
     globalThis.fetch = originalFetch;
     (globalThis as any).EventSource = originalEventSource;
     delete (window as any).__TAURI_IPC__;
+    vi.restoreAllMocks();
   });
 
   describe('isMobile detection', () => {
@@ -66,26 +70,37 @@ describe('Runtime Utility & Bridge', () => {
   });
 
   describe('getMobileToken', () => {
-    it('extracts token from URL search parameters and stores it in localStorage', () => {
+    it('extracts token from URL search parameters without storing it in web storage', () => {
+      const localSetItem = vi.spyOn(localStorage, 'setItem');
+      const sessionSetItem = vi.spyOn(sessionStorage, 'setItem');
       window.location.search = '?token=my-secret-token-123';
       const token = getMobileToken();
       expect(token).toBe('my-secret-token-123');
-      expect(localStorage.getItem('mobile_token')).toBe('my-secret-token-123');
+      expect(localSetItem).not.toHaveBeenCalled();
+      expect(sessionSetItem).not.toHaveBeenCalled();
     });
 
-    it('reads token from localStorage when not present in URL', () => {
+    it('reads token from transient runtime state when not present in URL', () => {
+      const localSetItem = vi.spyOn(localStorage, 'setItem');
+      const sessionSetItem = vi.spyOn(sessionStorage, 'setItem');
       window.location.search = '';
-      localStorage.setItem('mobile_token', 'local-token-val');
+      setMobileToken('local-token-val');
       const token = getMobileToken();
       expect(token).toBe('local-token-val');
+      expect(localSetItem).not.toHaveBeenCalled();
+      expect(sessionSetItem).not.toHaveBeenCalled();
     });
 
-    it('sets and clears the stored token', () => {
+    it('sets and clears the transient token', () => {
+      const localSetItem = vi.spyOn(localStorage, 'setItem');
+      const sessionSetItem = vi.spyOn(sessionStorage, 'setItem');
       setMobileToken('manual-token');
-      expect(localStorage.getItem('mobile_token')).toBe('manual-token');
+      expect(getMobileToken()).toBe('manual-token');
+      expect(localSetItem).not.toHaveBeenCalled();
+      expect(sessionSetItem).not.toHaveBeenCalled();
 
       clearMobileToken();
-      expect(localStorage.getItem('mobile_token')).toBeNull();
+      expect(getMobileToken()).toBe('');
     });
 
     it('removes an invalid token from the current URL when clearing it', () => {
@@ -100,7 +115,7 @@ describe('Runtime Utility & Bridge', () => {
 
   describe('appInvoke HTTP Adapter (Mobile mode)', () => {
     beforeEach(() => {
-      localStorage.setItem('mobile_token', 'secret-token');
+      setMobileToken('secret-token');
     });
 
     it('calls GET /api/mobile/status for get_mobile_service_status', async () => {
@@ -114,6 +129,7 @@ describe('Runtime Utility & Bridge', () => {
       expect(result.isRunning).toBe(true);
       expect(mockFetch).toHaveBeenCalledWith('http://localhost:3000/api/mobile/status', {
         cache: 'no-store',
+        credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
           'X-Mobile-Token': 'secret-token',
@@ -132,6 +148,7 @@ describe('Runtime Utility & Bridge', () => {
       expect(result).toEqual([]);
       expect(mockFetch).toHaveBeenCalledWith('http://localhost:3000/api/mobile/sessions?prefix=partner-session-', {
         cache: 'no-store',
+        credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
           'X-Mobile-Token': 'secret-token',
@@ -182,6 +199,7 @@ describe('Runtime Utility & Bridge', () => {
           'X-Mobile-Token': 'secret-token',
         },
         cache: 'no-store',
+        credentials: 'same-origin',
         body: JSON.stringify(sessionObj),
       });
     });
@@ -231,14 +249,34 @@ describe('Runtime Utility & Bridge', () => {
           'X-Mobile-Token': 'secret-token',
         },
         cache: 'no-store',
+        credentials: 'same-origin',
         body: JSON.stringify(reqBody),
+      });
+    });
+
+    it('allows cookie-only authentication without a JavaScript-readable token', async () => {
+      clearMobileToken();
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ isRunning: true }),
+      });
+      globalThis.fetch = mockFetch;
+
+      await appInvoke('get_mobile_service_status');
+
+      expect(mockFetch).toHaveBeenCalledWith('http://localhost:3000/api/mobile/status', {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       });
     });
   });
 
   describe('listenStream (Mobile mode)', () => {
     it('instantiates EventSource and registers message callbacks', () => {
-      localStorage.setItem('mobile_token', 'secret-token');
+      setMobileToken('secret-token');
 
       const mockClose = vi.fn();
       let lastUrl = '';
@@ -284,6 +322,29 @@ describe('Runtime Utility & Bridge', () => {
         });
       }
       expect(onComplete).toHaveBeenCalled();
+      expect(mockClose).toHaveBeenCalled();
+    });
+
+    it('uses the cookie-authenticated stream URL when no transient token exists', () => {
+      clearMobileToken();
+
+      const mockClose = vi.fn();
+      let lastUrl = '';
+
+      class MockEventSource {
+        onmessage: ((e: any) => void) | null = null;
+        onerror: ((e: any) => void) | null = null;
+        close = mockClose;
+        constructor(url: string) {
+          lastUrl = url;
+        }
+      }
+      (globalThis as any).EventSource = MockEventSource;
+
+      const unsubscribe = listenStream('run-cookie', vi.fn());
+
+      expect(lastUrl).toBe('http://localhost:3000/api/mobile/stream?runId=run-cookie');
+      unsubscribe();
       expect(mockClose).toHaveBeenCalled();
     });
   });

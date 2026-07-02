@@ -277,6 +277,8 @@ function getCurrentBookTravelSnapshot(overrides: Partial<BookTravelSnapshot> = {
     summaryMemory: state.summaryMemory,
     isCompleted: state.isCompleted,
     ending: state.ending,
+    input: state.input,
+    inputMode: state.inputMode,
     ...overrides,
   };
 }

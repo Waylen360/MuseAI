@@ -140,24 +140,29 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
   const supportsCompactionTurnThreshold = agentId === 'partnerChat' || agentId === 'storyAgent' || agentId === 'storyDynamicAgent';
   const supportsSamplingControls = supportsCompactionTurnThreshold;
 
-  React.useEffect(() => {
+  const buildFormValues = React.useCallback((config: typeof defaultConfig, prompt: string) => {
     const values: Record<string, unknown> = {
-      temperature: agentConfig.temperature ?? defaultConfig.temperature ?? 0.3,
-      maxOutputTokens: agentConfig.maxOutputTokens ?? defaultConfig.maxOutputTokens ?? 32000,
-      maxContextTokens: agentConfig.maxContextTokens ?? defaultConfig.maxContextTokens ?? 200000,
-      thinkingDepth: agentConfig.thinkingDepth ?? defaultConfig.thinkingDepth ?? 'off',
-      prompt: currentPrompt,
+      temperature: config.temperature ?? defaultConfig.temperature ?? 0.3,
+      maxOutputTokens: config.maxOutputTokens ?? defaultConfig.maxOutputTokens ?? 32000,
+      maxContextTokens: config.maxContextTokens ?? defaultConfig.maxContextTokens ?? 200000,
+      thinkingDepth: config.thinkingDepth ?? defaultConfig.thinkingDepth ?? 'off',
+      prompt,
     };
     if (supportsCompactionTurnThreshold) {
-      values.compactionTurnThreshold = agentConfig.compactionTurnThreshold ?? defaultConfig.compactionTurnThreshold ?? 20;
+      values.compactionTurnThreshold = config.compactionTurnThreshold ?? defaultConfig.compactionTurnThreshold ?? 20;
     }
     if (supportsSamplingControls) {
-      values.frequencyPenalty = agentConfig.frequencyPenalty ?? defaultConfig.frequencyPenalty ?? 0.3;
-      values.presencePenalty = agentConfig.presencePenalty ?? defaultConfig.presencePenalty ?? 0.2;
-      values.topP = agentConfig.topP ?? defaultConfig.topP ?? 0.9;
+      values.frequencyPenalty = config.frequencyPenalty ?? defaultConfig.frequencyPenalty ?? 0.3;
+      values.presencePenalty = config.presencePenalty ?? defaultConfig.presencePenalty ?? 0.2;
+      values.topP = config.topP ?? defaultConfig.topP ?? 0.9;
     }
-    form.setFieldsValue(values);
-  }, [agentConfig, currentPrompt, defaultConfig, form, supportsCompactionTurnThreshold, supportsSamplingControls]);
+    return values;
+  }, [defaultConfig, supportsCompactionTurnThreshold, supportsSamplingControls]);
+
+  const initialFormValues = React.useMemo(
+    () => buildFormValues(agentConfig, currentPrompt),
+    [agentConfig, buildFormValues, currentPrompt],
+  );
 
   const handleSave = (values: any) => {
     if (showModelControls) {
@@ -180,21 +185,7 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
   };
 
   const handleReset = () => {
-    const values: Record<string, unknown> = {
-      temperature: defaultConfig.temperature ?? 0.3,
-      maxOutputTokens: defaultConfig.maxOutputTokens ?? 32000,
-      maxContextTokens: defaultConfig.maxContextTokens ?? 200000,
-      thinkingDepth: defaultConfig.thinkingDepth ?? 'off',
-      prompt: defaultPrompt,
-    };
-    if (supportsCompactionTurnThreshold) {
-      values.compactionTurnThreshold = defaultConfig.compactionTurnThreshold ?? 20;
-    }
-    if (supportsSamplingControls) {
-      values.frequencyPenalty = defaultConfig.frequencyPenalty ?? 0.3;
-      values.presencePenalty = defaultConfig.presencePenalty ?? 0.2;
-      values.topP = defaultConfig.topP ?? 0.9;
-    }
+    const values = buildFormValues(defaultConfig, defaultPrompt);
     form.setFieldsValue(values);
     if (showModelControls) {
       const nextConfig = {
@@ -245,6 +236,7 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
       <Form
         form={form}
         layout="vertical"
+        initialValues={initialFormValues}
         onFinish={handleSave}
         requiredMark={false}
       >

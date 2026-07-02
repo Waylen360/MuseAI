@@ -104,6 +104,8 @@ export interface AppInvokeCommands {
 
 export type AppInvokeCommand = keyof AppInvokeCommands;
 
+let transientMobileToken = '';
+
 export const isTauriHost = (): boolean => {
   if (typeof window === 'undefined') return false;
   // If in vitest/jest test environment, default to desktop/tauri mock invoke
@@ -154,25 +156,29 @@ export const isMobile = (): boolean => {
   return false;
 };
 
-export const getMobileToken = (): string => {
+const readMobileTokenFromUrl = (): string => {
   if (typeof window === 'undefined') return '';
-  const token = new URLSearchParams(window.location.search).get('token');
+  return new URLSearchParams(window.location.search).get('token') || '';
+};
+
+export const getMobileToken = (): string => {
+  const token = readMobileTokenFromUrl();
   if (token) {
-    localStorage.setItem('mobile_token', token);
+    transientMobileToken = token;
     return token;
   }
-  return localStorage.getItem('mobile_token') || '';
+  return transientMobileToken;
 };
 
 export const setMobileToken = (token: string): void => {
   if (typeof window !== 'undefined') {
-    localStorage.setItem('mobile_token', token);
+    transientMobileToken = token;
   }
 };
 
 export const clearMobileToken = (): void => {
   if (typeof window !== 'undefined') {
-    localStorage.removeItem('mobile_token');
+    transientMobileToken = '';
     const params = new URLSearchParams(window.location.search);
     if (params.has('token')) {
       params.delete('token');
@@ -184,13 +190,29 @@ export const clearMobileToken = (): void => {
   }
 };
 
-// Auto-extract and save token if present in URL
+// Keep the URL token only in memory; the mobile server persists it as an HttpOnly cookie.
 if (typeof window !== 'undefined') {
-  const token = new URLSearchParams(window.location.search).get('token');
+  const token = readMobileTokenFromUrl();
   if (token) {
-    localStorage.setItem('mobile_token', token);
+    transientMobileToken = token;
   }
 }
+
+const getMobileHeaders = (): Record<string, string> => {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  const token = getMobileToken();
+  if (token) {
+    headers['X-Mobile-Token'] = token;
+  }
+  return headers;
+};
+
+const withMobileCredentials = (init: RequestInit = {}): RequestInit => ({
+  credentials: 'same-origin',
+  ...init,
+});
 
 export async function appInvoke<C extends AppInvokeCommand>(
   cmd: C,
@@ -202,11 +224,7 @@ export async function appInvoke<C extends AppInvokeCommand>(
   }
 
   // Mobile HTTP mapping
-  const token = getMobileToken();
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'X-Mobile-Token': token,
-  };
+  const headers = getMobileHeaders();
 
   const getUrl = (path: string) => {
     // If running on mobile, we make requests to the same origin (host/port)
@@ -217,7 +235,7 @@ export async function appInvoke<C extends AppInvokeCommand>(
 
   switch (cmd) {
     case 'get_mobile_service_status': {
-      const res = await fetch(getUrl('/api/mobile/status'), { headers, cache: 'no-store' });
+      const res = await fetch(getUrl('/api/mobile/status'), withMobileCredentials({ headers, cache: 'no-store' }));
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return res.json();
     }
@@ -226,51 +244,51 @@ export async function appInvoke<C extends AppInvokeCommand>(
       if (cmdArgs?.prefix) params.set('prefix', cmdArgs.prefix);
       if (cmdArgs?.sessionKind) params.set('sessionKind', cmdArgs.sessionKind);
       const query = params.toString();
-      const res = await fetch(getUrl(`/api/mobile/sessions${query ? `?${query}` : ''}`), { headers, cache: 'no-store' });
+      const res = await fetch(getUrl(`/api/mobile/sessions${query ? `?${query}` : ''}`), withMobileCredentials({ headers, cache: 'no-store' }));
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return res.json();
     }
     case 'load_agent_session': {
-      const res = await fetch(getUrl(`/api/mobile/sessions/${cmdArgs.id}`), { headers, cache: 'no-store' });
+      const res = await fetch(getUrl(`/api/mobile/sessions/${cmdArgs.id}`), withMobileCredentials({ headers, cache: 'no-store' }));
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return res.json();
     }
     case 'save_agent_session': {
-      const res = await fetch(getUrl('/api/mobile/sessions'), {
+      const res = await fetch(getUrl('/api/mobile/sessions'), withMobileCredentials({
         method: 'POST',
         headers,
         cache: 'no-store',
         body: JSON.stringify(cmdArgs.session),
-      });
+      }));
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return res.json();
     }
     case 'delete_agent_session': {
-      const res = await fetch(getUrl(`/api/mobile/sessions/${cmdArgs.id}`), {
+      const res = await fetch(getUrl(`/api/mobile/sessions/${cmdArgs.id}`), withMobileCredentials({
         method: 'DELETE',
         headers,
         cache: 'no-store',
-      });
+      }));
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return undefined;
     }
     case 'update_agent_session_title': {
-      const res = await fetch(getUrl(`/api/mobile/sessions/${cmdArgs.id}/title`), {
+      const res = await fetch(getUrl(`/api/mobile/sessions/${cmdArgs.id}/title`), withMobileCredentials({
         method: 'PUT',
         headers,
         cache: 'no-store',
         body: JSON.stringify({ title: cmdArgs.title }),
-      });
+      }));
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return res.json();
     }
     case 'summarize_text': {
-      const res = await fetch(getUrl('/api/mobile/summarize'), {
+      const res = await fetch(getUrl('/api/mobile/summarize'), withMobileCredentials({
         method: 'POST',
         headers,
         cache: 'no-store',
         body: JSON.stringify({ text: cmdArgs.request.text }),
-      });
+      }));
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return res.json();
     }
@@ -285,12 +303,12 @@ export async function appInvoke<C extends AppInvokeCommand>(
       if (!sessionId) {
         throw new Error('Missing sessionId for mobile memory analysis');
       }
-      const res = await fetch(getUrl(`/api/mobile/sessions/${sessionId}/analyze-memory`), {
+      const res = await fetch(getUrl(`/api/mobile/sessions/${sessionId}/analyze-memory`), withMobileCredentials({
         method: 'POST',
         headers,
         cache: 'no-store',
         body: JSON.stringify({ characterCardId: cmdArgs.characterCardId ?? null }),
-      });
+      }));
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return res.json();
     }
@@ -301,29 +319,29 @@ export async function appInvoke<C extends AppInvokeCommand>(
       if (!sessionId || !payload) {
         throw new Error('Missing sessionId or payload for mobile archiving');
       }
-      const res = await fetch(getUrl(`/api/mobile/sessions/${sessionId}/archive`), {
+      const res = await fetch(getUrl(`/api/mobile/sessions/${sessionId}/archive`), withMobileCredentials({
         method: 'POST',
         headers,
         cache: 'no-store',
         body: JSON.stringify(payload),
-      });
+      }));
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return undefined;
     }
     case 'start_chat_completion_stream': {
       const isStory = cmdArgs.request?.allowedTools && cmdArgs.request.allowedTools.length > 0;
       const endpoint = isStory ? '/api/mobile/story/start' : '/api/mobile/chat/start';
-      const res = await fetch(getUrl(endpoint), {
+      const res = await fetch(getUrl(endpoint), withMobileCredentials({
         method: 'POST',
         headers,
         cache: 'no-store',
         body: JSON.stringify(cmdArgs.request),
-      });
+      }));
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return res.json();
     }
     case 'convert_character_card_to_silly_tavern': {
-      const res = await fetch(getUrl('/api/mobile/character-cards/convert-silly-tavern'), {
+      const res = await fetch(getUrl('/api/mobile/character-cards/convert-silly-tavern'), withMobileCredentials({
         method: 'POST',
         headers,
         cache: 'no-store',
@@ -332,32 +350,32 @@ export async function appInvoke<C extends AppInvokeCommand>(
           worldBookEntries: cmdArgs.request.worldBookEntries,
           systemPrompt: cmdArgs.request.systemPrompt,
         }),
-      });
+      }));
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return res.text();
     }
     case 'stop_chat_stream': {
-      const res = await fetch(getUrl('/api/mobile/chat/stop'), {
+      const res = await fetch(getUrl('/api/mobile/chat/stop'), withMobileCredentials({
         method: 'POST',
         headers,
         cache: 'no-store',
         body: JSON.stringify({ run_id: cmdArgs.runId }),
-      });
+      }));
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return undefined;
     }
     case 'load_app_state': {
-      const res = await fetch(getUrl(`/api/mobile/state/${cmdArgs.name}`), { headers, cache: 'no-store' });
+      const res = await fetch(getUrl(`/api/mobile/state/${cmdArgs.name}`), withMobileCredentials({ headers, cache: 'no-store' }));
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return res.text();
     }
     case 'save_app_state': {
-      const res = await fetch(getUrl(`/api/mobile/state/${cmdArgs.name}`), {
+      const res = await fetch(getUrl(`/api/mobile/state/${cmdArgs.name}`), withMobileCredentials({
         method: 'POST',
         headers,
         cache: 'no-store',
         body: cmdArgs.content,
-      });
+      }));
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       return undefined;
     }
@@ -399,7 +417,11 @@ export function listenStream(
 
   // Mobile SSE
   const token = getMobileToken();
-  const url = `${window.location.origin}/api/mobile/stream?runId=${encodeURIComponent(runId)}&token=${encodeURIComponent(token)}`;
+  const params = new URLSearchParams({ runId });
+  if (token) {
+    params.set('token', token);
+  }
+  const url = `${window.location.origin}/api/mobile/stream?${params.toString()}`;
   const eventSource = new EventSource(url);
 
   eventSource.onmessage = (event) => {

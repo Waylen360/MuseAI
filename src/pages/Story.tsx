@@ -21,7 +21,7 @@ import { listen } from '@tauri-apps/api/event';
 
 
 import { useSettingsStore } from '../stores/useSettingsStore';
-import { usePartnerStore } from '../stores/usePartnerStore';
+
 import { useStoryStore } from '../stores/useStoryStore';
 import { usePartnerChatStore } from '../stores/usePartnerChatStore';
 import { useBookTravelStore, type BookTravelBeat, type BookTravelScene, type BookTravelTurnSnapshot } from '../stores/useBookTravelStore';
@@ -34,6 +34,7 @@ import {
 import { resolveBookTravelProgressMaterial } from '../utils/sessionHistory';
 import { ensureSessionId } from '../utils/sessionIds';
 import { getEffectiveMessagesForContextStats } from '../utils/contextCompaction';
+import { createStableContentKey } from '../utils/renderKeys';
 
 interface ChatStreamEvent {
   runId: string;
@@ -359,8 +360,6 @@ const isBookTravelStreamCancelled = (err?: unknown) => (
 const useStoryView = () => {
   const {
     messages, setMessages,
-    input, setInput,
-    inputMode, setInputMode,
     isStreaming, setIsStreaming,
     selectedWorldBookId,
     selectedCharacterCardIds,
@@ -375,6 +374,7 @@ const useStoryView = () => {
   } = useStoryStore();
 
   const bookTravelStore = useBookTravelStore();
+  const { input, setInput, inputMode, setInputMode } = bookTravelStore;
   const navigate = useNavigate();
   const [isBookTravelHistoryOpen, setIsBookTravelHistoryOpen] = useState(false);
   const [bookTravelMaterialFilter, setBookTravelMaterialFilter] = useState<string | null>(null);
@@ -473,7 +473,7 @@ const useStoryView = () => {
     systemPrompt,
   });
 
-  const { worldBooks, characterCards } = usePartnerStore();
+
   const { userInfo: partnerChatUserInfo } = usePartnerChatStore();
   const settings = useSettingsStore();
 
@@ -699,10 +699,10 @@ const useStoryView = () => {
   };
 
   useEffect(() => {
-    if (messages.length > 0) {
+    if (bookTravelStore.turns.length > 0) {
       scrollToBottomOnce();
     }
-  }, [messages.length]);
+  }, [bookTravelStore.turns.length]);
 
   useEffect(() => {
     if (startProgressPhase !== 'planner' && startProgressPhase !== 'writer') return;
@@ -711,8 +711,8 @@ const useStoryView = () => {
     return () => window.clearInterval(timer);
   }, [startProgressPhase]);
 
-  const selectedWorldBook = worldBooks.find(wb => wb.id === selectedWorldBookId) || null;
-  const selectedCards = characterCards.filter(cc => selectedCharacterCardIds.includes(cc.id));
+  const selectedWorldBook = bookTravelStore.selectedWorldBook || null;
+  const selectedCards = bookTravelStore.selectedCharacterCards || [];
   const storyAllowedTools = getStoryAllowedTools(dynamicRoleLoadingEnabled);
   const rolePlayContext = dynamicRoleLoadingEnabled ? {
     chatSystemPrompt: settings.partnerChatPrompt || '',
@@ -720,8 +720,8 @@ const useStoryView = () => {
     userInfo: partnerChatUserInfo,
     characterCards: selectedCards.map((card) => ({
       id: card.id,
-      name: card.name,
-      content: card.content,
+      name: card.title,
+      content: card.content || '',
     })),
   } : null;
 
@@ -731,8 +731,8 @@ const useStoryView = () => {
     : settings.storyAgentPrompt || '';
   const effectiveSystemPrompt = compileStorySystemPrompt({
     basePrompt: baseSystemPrompt,
-    worldBookContent: selectedWorldBook ? selectedWorldBook.content : null,
-    characterCards: selectedCards.map((card) => ({ name: card.name, content: card.content })),
+    worldBookContent: selectedWorldBook?.content || null,
+    characterCards: selectedCards.map((card) => ({ name: card.title, content: card.content || '' })),
     userInfo: partnerChatUserInfo,
     dynamicRoleLoadingEnabled,
   });
@@ -1455,11 +1455,11 @@ const useStoryView = () => {
       </div>
       <div className="agent-context-popover__row">
         <span className="agent-context-popover__label">世界书：</span>
-        <span className="agent-context-popover__value">{selectedWorldBook?.name || '未绑定'}</span>
+        <span className="agent-context-popover__value">{selectedWorldBook?.title || '未绑定'}</span>
       </div>
       <div className="agent-context-popover__row">
         <span className="agent-context-popover__label">活跃角色：</span>
-        <span className="agent-context-popover__value">{selectedCards.map(c => c.name).join(', ') || '未绑定'}</span>
+        <span className="agent-context-popover__value">{selectedCards.map(c => c.title).join(', ') || '未绑定'}</span>
       </div>
       <div className="agent-context-popover__divider" />
       <div className="agent-context-popover__row">
@@ -1469,7 +1469,7 @@ const useStoryView = () => {
     </div>
   );
 
-  const hasMessages = messages.length > 0;
+
   const canStartBookTravel = Boolean(
     bookTravelStore.selectedMaterialId &&
     bookTravelStore.selectedEntryPointId &&
@@ -1546,7 +1546,9 @@ const useStoryView = () => {
         <div className="agent-chat__title">
           <CompassOutlined style={{ color: '#d97757', fontSize: 18 }} />
           <h3 style={{ margin: 0, fontWeight: 600, color: '#33312e', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sessionTitle}</span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {bookTravelStore.selectedOutline?.title ? `穿书中 · ${bookTravelStore.selectedOutline.title}` : '穿书准备中'}
+            </span>
             {bookTravelStore.selectedMaterialId || bookTravelStore.scenes.length > 0 ? (
               <Tag color="#d97757" style={{ marginLeft: 8, borderRadius: 4, flexShrink: 0, whiteSpace: 'nowrap' }}>
                 {bookTravelStore.scenes.length > 0
@@ -1555,7 +1557,7 @@ const useStoryView = () => {
               </Tag>
             ) : (
               <span style={{ fontSize: 12, color: '#8c8882', fontWeight: 400, flexShrink: 0, whiteSpace: 'nowrap' }}>
-                ({selectedWorldBook?.name || '无世界书'} · {selectedCards.length}个活跃角色{dynamicRoleLoadingEnabled ? ' · 动态加载' : ''})
+                ({selectedWorldBook?.title || '无世界书'} · {selectedCards.length}个活跃角色)
               </span>
             )}
           </h3>
@@ -1682,6 +1684,7 @@ const useStoryView = () => {
               const shouldShowSceneBrief = turn.classification === 'change-scene' && (Boolean(userCharacterLabel) || sceneGoals.length > 0);
               const shouldShowSituationCard = shouldShowSceneBrief || Boolean(sceneContext?.currentSituation);
               const canRetryWriter = turn.status === 'error' && turn.failedStage === 'writing';
+              const getSuggestedChoiceKey = createStableContentKey(`${turn.id}-choice`);
               return (
                 <div key={turn.id} className="book-travel-turn">
                   <div className="book-travel-user-row">
@@ -1703,7 +1706,7 @@ const useStoryView = () => {
                         <div className="book-travel-user-bubble">
                           {turn.userInput}
                         </div>
-                        {idx === bookTravelStore.turns.length - 1 && !isSessionArchived && !isBookTravelBusy && (
+                        {idx === bookTravelStore.turns.length - 1 && !bookTravelStore.isCompleted && !isBookTravelBusy && (
                           <div style={{ marginTop: 4, textAlign: 'right' }}>
                             <Button
                               type="text"
@@ -1793,7 +1796,7 @@ const useStoryView = () => {
                             重试写手
                           </Button>
                         )}
-                        {!canRetryWriter && idx === bookTravelStore.turns.length - 1 && !isSessionArchived && !isBookTravelBusy && (
+                        {!canRetryWriter && idx === bookTravelStore.turns.length - 1 && !bookTravelStore.isCompleted && !isBookTravelBusy && (
                           <>
                             <Button
                               type="text"
@@ -1816,11 +1819,11 @@ const useStoryView = () => {
                           </>
                         )}
                       </div>
-                      {turn.suggestedChoices && turn.suggestedChoices.length > 0 && !isSessionArchived && idx === bookTravelStore.turns.length - 1 && (
+                      {turn.suggestedChoices && turn.suggestedChoices.length > 0 && !bookTravelStore.isCompleted && idx === bookTravelStore.turns.length - 1 && (
                         <div className="book-travel-suggested-choices" style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                          {turn.suggestedChoices.map((choice, i) => (
+                          {turn.suggestedChoices.map((choice) => (
                             <Button
-                              key={i}
+                              key={getSuggestedChoiceKey(choice)}
                               type="dashed"
                               style={{ textAlign: 'left', height: 'auto', padding: '8px 12px', whiteSpace: 'normal', color: '#d97757', borderColor: '#d97757' }}
                               onClick={() => {
@@ -2043,7 +2046,7 @@ const useStoryView = () => {
       </div>
 
       {/* Composer Input Area */}
-      {(hasMessages || bookTravelStore.scenes.length > 0) && !bookTravelStore.isCompleted && (
+      {(bookTravelStore.scenes.length > 0) && !bookTravelStore.isCompleted && (
         <div className="agent-composer book-travel-composer">
           {/* Formatted Text input helper overlay inside composer box */}
           <div id="agent-composer-box" className="agent-composer__box book-travel-composer-box">
@@ -2074,7 +2077,7 @@ const useStoryView = () => {
             <Input.TextArea
               className="agent-composer__textarea"
               autoSize={{ minRows: 1, maxRows: 8 }}
-              disabled={isSessionArchived}
+              disabled={bookTravelStore.isCompleted}
               onChange={(e) => setInput(e.target.value)}
               style={{ zIndex: 2, position: 'relative', background: 'transparent', boxShadow: 'none', border: 'none', padding: '12px 16px 40px 16px', fontSize: '15px' }}
               onKeyDown={(event) => {
@@ -2084,8 +2087,8 @@ const useStoryView = () => {
                 }
               }}
               placeholder={
-                isSessionArchived
-                  ? "本局冒险记忆已被封存，无法继续发送指令"
+                bookTravelStore.isCompleted
+                  ? "本局穿书已完结，无法继续发送指令"
                   : bookTravelStore.scenes.length > 0
                     ? inputMode === 'speech'
                       ? "说些什么..."
@@ -2139,10 +2142,10 @@ const useStoryView = () => {
                   </button>
                 </Tooltip>
 
-                <Tooltip title={isStreaming ? '停止' : isBookTravelBusy ? '正在处理行动' : isSessionArchived ? '当前故事已归档' : '提交行动'}>
+                <Tooltip title={isStreaming ? '停止' : isBookTravelBusy ? '正在处理行动' : bookTravelStore.isCompleted ? '当前故事已结局' : '提交行动'}>
                   <Button
                     className="de-ai-agent-run-button"
-                    disabled={isSessionArchived || isBookTravelBusy || (!isStreaming && !input.trim())}
+                    disabled={bookTravelStore.isCompleted || isBookTravelBusy || (!isStreaming && !input.trim())}
                     icon={isStreaming ? <StopOutlined /> : <PlayCircleOutlined />}
                     onClick={isStreaming ? handleStop : handleSend}
                     shape="circle"

@@ -68,7 +68,7 @@ const MOBILE_STORY_ACTIVE_COMPANIONS_BAR_STYLE: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: '6px',
-  fontSize: '11px',
+  fontSize: '12px',
   color: '#8c8880',
   flexShrink: 0,
 };
@@ -762,7 +762,7 @@ const useMobileStoryView = () => {
         </button>
         {isExpanded && (
           <pre style={{
-            fontSize: '11px',
+            fontSize: '12px',
             color: '#555',
             marginTop: '6px',
             whiteSpace: 'pre-wrap',
@@ -873,7 +873,7 @@ const useMobileStoryView = () => {
             }}>
               <div>
                 <span style={{ fontSize: '14px', fontWeight: 600, color: '#33312e' }}>开启动态角色加载</span>
-                <p style={{ margin: '4px 0 0 0', fontSize: '11px', color: '#8c8880' }}>开启后，允许大模型在剧情需要时调用角色发言。</p>
+                <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#8c8880' }}>开启后，允许大模型在剧情需要时调用角色发言。</p>
               </div>
               <Switch
                 checked={dynamicRoleLoadingEnabled}
@@ -967,12 +967,13 @@ const useMobileStoryView = () => {
                             contentToRender = contentToRender.replace(choicesMatch[0], '');
                             try {
                               choices = JSON.parse(choicesMatch[1]);
-                            } catch (e) {}
+                            } catch (e) { }
                           }
 
                           const parts = contentToRender.split(/(\[\[TOOL:[^\]]+\]\])/);
                           const getMarkdownPartKey = createStableContentKey(`${msg.id}-md`);
                           const getToolKey = createStableToolKey(`${msg.id}-tool`);
+                          const getChoiceKey = createStableContentKey(`${msg.id}-choice`);
                           const renderedParts = parts.map((part) => {
                             const match = part.match(/^\[\[TOOL:([^\]]+)\]\]$/);
                             if (match) {
@@ -1038,9 +1039,9 @@ const useMobileStoryView = () => {
                               {renderedParts}
                               {choices.length > 0 && !isSessionArchived && msg.id === messages[messages.length - 1]?.id && (
                                 <div className="book-travel-suggested-choices" style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                  {choices.map((choice, i) => (
+                                  {choices.map((choice) => (
                                     <Button
-                                      key={`choice-${i}`}
+                                      key={getChoiceKey(choice)}
                                       type="dashed"
                                       style={{ textAlign: 'left', height: 'auto', padding: '8px 12px', whiteSpace: 'normal', color: '#d97757', borderColor: '#d97757' }}
                                       onClick={() => {
@@ -1156,7 +1157,7 @@ const useMobileStoryView = () => {
                 </div>
               )}
               {isSessionArchived && (
-                <div style={{ fontSize: '11px', color: '#8c8880', textAlign: 'center', display: 'flex', justifyContent: 'center', gap: '4px', alignItems: 'center' }}>
+                <div style={{ fontSize: '12px', color: '#8c8880', textAlign: 'center', display: 'flex', justifyContent: 'center', gap: '4px', alignItems: 'center' }}>
                   <HistoryOutlined />
                   <span>故事已存档封存，人物记忆已更新</span>
                 </div>
