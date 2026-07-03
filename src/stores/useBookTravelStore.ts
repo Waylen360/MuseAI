@@ -113,6 +113,12 @@ export interface BookTravelSavedProgress {
   snapshot: BookTravelSnapshot;
 }
 
+export interface BookTravelSaveProgressOptions {
+  mode?: 'create' | 'overwrite';
+  title?: string;
+  targetId?: string | null;
+}
+
 export interface BookTravelSnapshot {
   selectedOutline: BookTravelMaterial | null;
   selectedWorldBook: BookTravelMaterial | null;
@@ -141,6 +147,7 @@ interface BookTravelState extends BookTravelSnapshot {
   assembledMaterials: BookTravelAssembledMaterial[];
   selectedMaterialId: string | null;
   savedProgresses: BookTravelSavedProgress[];
+  activeSavedProgressId: string | null;
   setInput: (input: string) => void;
   setInputMode: (mode: 'speech' | 'behavior' | 'plot') => void;
   selectOutline: (outline: BookTravelMaterial | null) => void;
@@ -170,7 +177,7 @@ interface BookTravelState extends BookTravelSnapshot {
   updateAssembledMaterial: (id: string, patch: Partial<BookTravelAssembledMaterialInput>) => void;
   deleteAssembledMaterial: (id: string) => void;
   loadAssembledMaterial: (id: string) => void;
-  saveProgress: (title?: string) => string;
+  saveProgress: (options?: string | BookTravelSaveProgressOptions) => string;
   deleteSavedProgress: (id: string) => void;
   loadSavedProgress: (id: string) => void;
   restoreSession: (snapshot: Partial<BookTravelSnapshot>) => void;
@@ -221,10 +228,12 @@ const initialState = {
 };
 
 const materialId = () => `book-travel-material-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const savedProgressId = () => `book-travel-progress-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const loadMaterialIntoSession = (material: BookTravelAssembledMaterial): Partial<BookTravelState> => ({
   ...initialState,
   selectedMaterialId: material.id,
+  activeSavedProgressId: null,
   selectedOutline: material.materials.outline,
   selectedWorldBook: material.materials.worldBook,
   selectedCharacterCards: material.materials.characterCards,
@@ -244,6 +253,7 @@ export const useBookTravelStore = create<BookTravelState>()(
       assembledMaterials: [],
       selectedMaterialId: null,
       savedProgresses: [],
+      activeSavedProgressId: null,
 
       setInput: (input) => set({ input }),
       setInputMode: (inputMode) => set({ inputMode }),
@@ -350,18 +360,28 @@ export const useBookTravelStore = create<BookTravelState>()(
         if (!material) return;
         set(loadMaterialIntoSession(material));
       },
-      saveProgress: (title) => {
+      saveProgress: (input) => {
         const state = get();
+        const options: BookTravelSaveProgressOptions = typeof input === 'string'
+          ? { title: input, mode: 'overwrite' }
+          : { mode: 'overwrite', ...input };
         const sessionKey = [
           state.selectedMaterialId || 'none',
           state.selectedEntryPointId || 'none',
           state.userCharacter?.name || 'none',
         ].join('-');
-        const existing = state.savedProgresses.find((p) => p.sessionKey === sessionKey);
-        const id = existing?.id || `book-travel-progress-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const existingBySession = state.savedProgresses.find((p) => p.sessionKey === sessionKey);
+        const targetId = options.mode === 'overwrite'
+          ? options.targetId || state.activeSavedProgressId || existingBySession?.id || null
+          : null;
+        const existing = targetId
+          ? state.savedProgresses.find((p) => p.id === targetId) || null
+          : null;
+        const id = options.mode === 'create' || !targetId ? savedProgressId() : targetId;
+        const title = options.title?.trim() || existing?.title || `穿书进度 ${new Date().toLocaleString('zh-CN')}`;
         const progress: BookTravelSavedProgress = {
           id,
-          title: title?.trim() || existing?.title || `穿书进度 ${new Date().toLocaleString('zh-CN')}`,
+          title,
           savedAt: Date.now(),
           materialId: state.selectedMaterialId,
           sessionKey,
@@ -369,19 +389,27 @@ export const useBookTravelStore = create<BookTravelState>()(
         };
         set((s) => ({
           savedProgresses: [progress, ...s.savedProgresses.filter((p) => p.id !== id)],
+          activeSavedProgressId: id,
         }));
         return id;
       },
       deleteSavedProgress: (id) => set((state) => ({
         savedProgresses: state.savedProgresses.filter((p) => p.id !== id),
+        activeSavedProgressId: state.activeSavedProgressId === id ? null : state.activeSavedProgressId,
       })),
       loadSavedProgress: (id) => {
         const progress = get().savedProgresses.find((p) => p.id === id);
         if (!progress) return;
-        set({ ...initialState, ...progress.snapshot, streamRuntime: initialStreamRuntime });
+        set({
+          ...initialState,
+          ...progress.snapshot,
+          selectedMaterialId: progress.materialId ?? null,
+          activeSavedProgressId: id,
+          streamRuntime: initialStreamRuntime,
+        });
       },
-      restoreSession: (snapshot) => set({ ...initialState, ...snapshot, streamRuntime: initialStreamRuntime }),
-      resetSession: () => set({ ...initialState, selectedMaterialId: null, streamRuntime: initialStreamRuntime }),
+      restoreSession: (snapshot) => set({ ...initialState, ...snapshot, activeSavedProgressId: null, streamRuntime: initialStreamRuntime }),
+      resetSession: () => set({ ...initialState, selectedMaterialId: null, activeSavedProgressId: null, streamRuntime: initialStreamRuntime }),
       setBookTravelStreamPhase: (phase) => set((state) => {
         const isRunning = phase === 'planner' || phase === 'writer';
         const isTerminal = phase === 'done' || phase === 'error' || phase === 'cancelled';

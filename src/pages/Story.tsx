@@ -26,12 +26,13 @@ import { useStoryStore } from '../stores/useStoryStore';
 import { usePartnerChatStore } from '../stores/usePartnerChatStore';
 import { useBookTravelStore, type BookTravelBeat, type BookTravelScene, type BookTravelTurnSnapshot } from '../stores/useBookTravelStore';
 import { Message, AgentSessionSummary, SessionContextCompaction, AgentToolEntry } from '../stores/useAgentStore';
+import SaveChoiceModal, { type SaveChoiceConfirmPayload } from '../components/SaveChoiceModal';
 import {
   buildStoryModelMessages,
   compileStorySystemPrompt,
   getStoryAllowedTools,
 } from './storyAgent';
-import { resolveBookTravelProgressMaterial } from '../utils/sessionHistory';
+import { formatHistorySavedAt, resolveBookTravelProgressMaterial } from '../utils/sessionHistory';
 import { ensureSessionId } from '../utils/sessionIds';
 import { getEffectiveMessagesForContextStats } from '../utils/contextCompaction';
 import { createStableContentKey } from '../utils/renderKeys';
@@ -378,6 +379,8 @@ const useStoryView = () => {
   const navigate = useNavigate();
   const [isBookTravelHistoryOpen, setIsBookTravelHistoryOpen] = useState(false);
   const [bookTravelMaterialFilter, setBookTravelMaterialFilter] = useState<string | null>(null);
+  const [isBookTravelSaveChoiceOpen, setIsBookTravelSaveChoiceOpen] = useState(false);
+  const [bookTravelSaveTitle, setBookTravelSaveTitle] = useState('');
 
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [editingUserText, setEditingUserText] = useState<string>('');
@@ -752,6 +755,9 @@ const useStoryView = () => {
   );
   const currentBookTravelScene = bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId);
   const currentBookTravelSceneTitle = currentBookTravelScene?.title?.trim();
+  const activeBookTravelProgress = bookTravelStore.activeSavedProgressId
+    ? bookTravelStore.savedProgresses.find((progress) => progress.id === bookTravelStore.activeSavedProgressId) || null
+    : null;
   const savedProgressRows = bookTravelStore.savedProgresses.map((progress) => ({
     progress,
     material: resolveBookTravelProgressMaterial(progress, bookTravelStore.assembledMaterials),
@@ -769,6 +775,24 @@ const useStoryView = () => {
     setIsTransitioningScene(false);
   };
 
+  const openBookTravelSaveChoice = () => {
+    setBookTravelSaveTitle(
+      currentBookTravelSceneTitle || activeBookTravelProgress?.title || `穿书进度 ${new Date().toLocaleString('zh-CN')}`
+    );
+    setIsBookTravelSaveChoiceOpen(true);
+  };
+
+  const handleConfirmBookTravelSave = ({ mode, name, targetId }: SaveChoiceConfirmPayload) => {
+    const title = name || currentBookTravelSceneTitle || activeBookTravelProgress?.title || `穿书进度 ${new Date().toLocaleString('zh-CN')}`;
+    bookTravelStore.saveProgress({
+      mode: mode === 'overwrite' && targetId ? 'overwrite' : 'create',
+      title,
+      targetId: mode === 'overwrite' ? targetId : null,
+    });
+    setBookTravelSaveTitle(title);
+    setIsBookTravelSaveChoiceOpen(false);
+    message.success('进度已保存');
+  };
 
   const showBookTravelStatusModal = () => {
     const currentScene = bookTravelStore.scenes.find((s) => s.id === bookTravelStore.currentSceneId);
@@ -1479,6 +1503,41 @@ const useStoryView = () => {
   return (
     <div className="agent-chat book-travel-page">
 
+      <SaveChoiceModal
+        open={isBookTravelSaveChoiceOpen}
+        title="保存进度"
+        nameLabel="进度名称"
+        initialName={bookTravelSaveTitle || currentBookTravelSceneTitle || '穿书进度'}
+        loading={false}
+        overwriteAvailable={bookTravelStore.savedProgresses.length > 0}
+        overwriteTargetLabel="覆盖进度"
+        overwriteTargets={bookTravelStore.savedProgresses.map((progress) => {
+          const material = resolveBookTravelProgressMaterial(progress, bookTravelStore.assembledMaterials);
+          const worldBookTitle = progress.snapshot.selectedWorldBook?.title || material?.materials.worldBook.title || null;
+          const characterNames = (
+            progress.snapshot.selectedCharacterCards.length > 0
+              ? progress.snapshot.selectedCharacterCards
+              : material?.materials.characterCards || []
+          ).map((card) => card.title).filter(Boolean);
+          return {
+            value: progress.id,
+            label: progress.title || '未命名进度',
+            description: `保存于 ${formatHistorySavedAt(progress.savedAt)}`,
+            details: [
+              `穿书素材：${material?.title || '未匹配穿书素材'}`,
+              worldBookTitle ? `世界书：${worldBookTitle}` : '未绑定世界书',
+              ...(characterNames.length > 0
+                ? characterNames.slice(0, 3).map((name) => `角色卡：${name}`)
+                : ['未绑定角色卡']),
+            ],
+          };
+        })}
+        initialOverwriteTargetId={activeBookTravelProgress?.id || bookTravelStore.savedProgresses[0]?.id || null}
+        unavailableOverwriteText="当前没有可覆盖的原记录，将保存为新记录。"
+        onCancel={() => setIsBookTravelSaveChoiceOpen(false)}
+        onConfirm={handleConfirmBookTravelSave}
+      />
+
       {/* Book Travel Planner Progress Modal */}
       <Modal
         open={startProgressOpen}
@@ -1571,10 +1630,7 @@ const useStoryView = () => {
                 type="text"
                 disabled={isStreaming}
                 icon={<FileProtectOutlined />}
-                onClick={() => {
-                  bookTravelStore.saveProgress(currentBookTravelSceneTitle);
-                  message.success('进度已保存');
-                }}
+                onClick={openBookTravelSaveChoice}
                 style={{
                   color: isStreaming ? '#8c8882' : '#d97757',
                   fontWeight: 500,

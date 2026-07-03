@@ -4,7 +4,12 @@ import { useBookTravelStore } from '../stores/useBookTravelStore';
 describe('useBookTravelStore', () => {
   beforeEach(() => {
     useBookTravelStore.getState().resetSession();
-    useBookTravelStore.setState({ assembledMaterials: [], selectedMaterialId: null });
+    useBookTravelStore.setState({
+      assembledMaterials: [],
+      selectedMaterialId: null,
+      savedProgresses: [],
+      activeSavedProgressId: null,
+    });
   });
 
   it('starts with empty book-travel state', () => {
@@ -159,5 +164,55 @@ describe('useBookTravelStore', () => {
     expect(state.scenes).toEqual([]);
     expect(state.ending).toBeNull();
     expect(state.isCompleted).toBe(false);
+  });
+
+  it('creates new progress records and overwrites an explicit active progress id', () => {
+    useBookTravelStore.setState({
+      selectedMaterialId: 'material-1',
+      selectedEntryPointId: 'entry-1',
+      userCharacter: { name: '林晚', identity: '替嫁者', goal: '改写死局' },
+      selectedOutline: { id: '/outline/第一卷.md', title: '第一卷.md' },
+      selectedWorldBook: { id: 'wb-1', title: '云州世界书' },
+      selectedCharacterCards: [{ id: 'cc-1', title: '沈霜' }],
+    });
+    const store = useBookTravelStore.getState();
+
+    const firstId = store.saveProgress({ mode: 'create', title: '第一份进度' });
+    const secondId = useBookTravelStore.getState().saveProgress({ mode: 'create', title: '第二份进度' });
+    expect(firstId).not.toBe(secondId);
+    expect(useBookTravelStore.getState().savedProgresses).toHaveLength(2);
+    expect(useBookTravelStore.getState().activeSavedProgressId).toBe(secondId);
+
+    const overwrittenId = useBookTravelStore.getState().saveProgress({
+      mode: 'overwrite',
+      targetId: firstId,
+      title: '覆盖后的第一份',
+    });
+
+    const state = useBookTravelStore.getState();
+    expect(overwrittenId).toBe(firstId);
+    expect(state.savedProgresses).toHaveLength(2);
+    expect(state.savedProgresses.find((item) => item.id === firstId)?.title).toBe('覆盖后的第一份');
+    expect(state.activeSavedProgressId).toBe(firstId);
+  });
+
+  it('tracks the active saved progress through load, delete, and reset', () => {
+    useBookTravelStore.setState({
+      selectedMaterialId: 'material-1',
+      selectedEntryPointId: 'entry-1',
+      userCharacter: { name: '林晚', identity: '替嫁者', goal: '改写死局' },
+    });
+    const progressId = useBookTravelStore.getState().saveProgress({ mode: 'create', title: '旧进度' });
+
+    useBookTravelStore.getState().loadSavedProgress(progressId);
+    expect(useBookTravelStore.getState().activeSavedProgressId).toBe(progressId);
+
+    useBookTravelStore.getState().deleteSavedProgress(progressId);
+    expect(useBookTravelStore.getState().activeSavedProgressId).toBeNull();
+
+    const nextId = useBookTravelStore.getState().saveProgress({ mode: 'create', title: '新进度' });
+    expect(useBookTravelStore.getState().activeSavedProgressId).toBe(nextId);
+    useBookTravelStore.getState().resetSession();
+    expect(useBookTravelStore.getState().activeSavedProgressId).toBeNull();
   });
 });

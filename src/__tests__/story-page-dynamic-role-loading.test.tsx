@@ -6,7 +6,7 @@ import { usePartnerStore } from '../stores/usePartnerStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { useStoryStore } from '../stores/useStoryStore';
 
-const invokeMock = vi.fn(async (command: string, _args?: unknown) => {
+const invokeMock = vi.fn(async (command: string, _args?: unknown): Promise<any> => {
   if (command === 'start_chat_completion_stream') return 'run-1';
   if (command === 'summarize_text') return '森林开局';
   if (command === 'save_agent_session') return { id: 'story-session-test', title: '森林开局', savedAt: Date.now() };
@@ -174,12 +174,118 @@ describe('Story dynamic role loading page', () => {
     render(<Adventure />);
 
     fireEvent.click(screen.getByRole('button', { name: /保存对话/ }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('保存对话');
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
 
     await waitFor(() => {
       const saveCall = invokeMock.mock.calls.find(([command]) => command === 'save_agent_session');
       const saveArgs = saveCall?.[1] as any;
       expect(saveArgs.session.id).toMatch(/^story-session-/);
       expect(useStoryStore.getState().sessionId).toBe(saveArgs.session.id);
+    });
+  });
+
+  it('saves an Adventure session as a new editable story record', async () => {
+    useStoryStore.setState({
+      sessionId: 'story-session-draft',
+      sessionTitle: '新故事',
+      messages: [{ id: 'm1', role: 'user', content: '进入森林', tools: [] }],
+    });
+    render(<Adventure />);
+
+    fireEvent.click(screen.getByRole('button', { name: /保存对话/ }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('保存对话');
+    expect(screen.getByLabelText('覆盖原记录')).toBeDisabled();
+
+    fireEvent.change(screen.getByRole('textbox', { name: '会话名称' }), {
+      target: { value: '森林分支存档' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
+
+    await waitFor(() => {
+      const saveCall = invokeMock.mock.calls.find(([command]) => command === 'save_agent_session');
+      const saveArgs = saveCall?.[1] as any;
+      expect(saveArgs.session.id).toMatch(/^story-session-/);
+      expect(saveArgs.session.id).not.toBe('story-session-draft');
+      expect(saveArgs.session.title).toBe('森林分支存档');
+      expect(saveArgs.session.sessionKind).toBe('story');
+      expect(useStoryStore.getState().sessionId).toBe(saveArgs.session.id);
+      expect(useStoryStore.getState().sessionTitle).toBe('森林分支存档');
+    });
+  });
+
+  it('overwrites the existing Adventure record from the save choice modal', async () => {
+    invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'start_chat_completion_stream') return 'run-1';
+      if (command === 'summarize_text') return '森林开局';
+      if (command === 'save_agent_session') return { id: (args as any).session.id, title: (args as any).session.title, savedAt: Date.now() };
+      if (command === 'list_agent_sessions') {
+        return [{ id: 'story-session-test', title: '森林开局', savedAt: Date.now(), sessionKind: 'story' }];
+      }
+      return undefined;
+    });
+    useStoryStore.setState({
+      sessionId: 'story-session-test',
+      sessionTitle: '森林开局',
+      messages: [{ id: 'm1', role: 'user', content: '进入森林', tools: [] }],
+    });
+    render(<Adventure />);
+    await waitFor(() => {
+      expect(useStoryStore.getState().sessions.some((item) => item.id === 'story-session-test')).toBe(true);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /保存对话/ }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('保存对话');
+    fireEvent.click(screen.getByLabelText('覆盖原记录'));
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
+
+    await waitFor(() => {
+      const saveCall = invokeMock.mock.calls.find(([command]) => command === 'save_agent_session');
+      expect(((saveCall?.[1] as any).session).id).toBe('story-session-test');
+    });
+  });
+
+  it('allows a draft Adventure session to overwrite an existing history record', async () => {
+    invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'start_chat_completion_stream') return 'run-1';
+      if (command === 'summarize_text') return '森林开局';
+      if (command === 'save_agent_session') return { id: (args as any).session.id, title: (args as any).session.title, savedAt: Date.now() };
+      if (command === 'list_agent_sessions') {
+        return [{
+          id: 'story-session-old',
+          title: '旧森林冒险',
+          savedAt: Date.now(),
+          sessionKind: 'story',
+          selectedWorldBookId: worldBook.id,
+          characterCardIds: [characterCard.id],
+        }];
+      }
+      return undefined;
+    });
+    useStoryStore.setState({
+      sessionId: 'story-session-draft',
+      sessionTitle: '新故事',
+      messages: [{ id: 'm1', role: 'user', content: '覆盖旧森林记录', tools: [] }],
+    });
+    render(<Adventure />);
+    await waitFor(() => {
+      expect(useStoryStore.getState().sessions.length).toBeGreaterThan(0);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /保存对话/ }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('保存对话');
+    expect(screen.getByLabelText('覆盖原记录')).not.toBeDisabled();
+    expect(screen.getByText('旧森林冒险')).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByLabelText('覆盖记录'));
+    expect(await screen.findAllByText(/保存于/)).not.toHaveLength(0);
+    expect(screen.getByText('世界书：测试世界')).toBeInTheDocument();
+    expect(screen.getByText('角色卡：陆雪莹')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
+
+    await waitFor(() => {
+      const saveCall = invokeMock.mock.calls.find(([command]) => command === 'save_agent_session');
+      expect(((saveCall?.[1] as any).session).id).toBe('story-session-old');
+      expect(useStoryStore.getState().sessionId).toBe('story-session-old');
     });
   });
 

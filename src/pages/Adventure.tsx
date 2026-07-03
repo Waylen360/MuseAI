@@ -30,6 +30,7 @@ import { useBookTravelStore } from '../stores/useBookTravelStore';
 
 import { usePartnerChatStore } from '../stores/usePartnerChatStore';
 import { SessionHistoryModal } from '../components/SessionHistoryModal';
+import SaveChoiceModal, { type SaveChoiceConfirmPayload } from '../components/SaveChoiceModal';
 import { Message, AgentSessionSummary, AgentSessionRecord, SessionContextCompaction, AgentToolEntry } from '../stores/useAgentStore';
 import {
   buildStoryModelMessages,
@@ -41,9 +42,10 @@ import { parseArchiveAnalysisResponse } from '../utils/archiveAnalysis';
 import { getCharacterCardIdsForWorldBook, groupCharacterCardsByWorldBook } from '../utils/characterCardGroups';
 import { createStableContentKey, createStableToolKey } from '../utils/renderKeys';
 import { useStateGroup } from '../utils/reducerState';
-import { ensureSessionId } from '../utils/sessionIds';
+import { createSessionId, ensureSessionId } from '../utils/sessionIds';
 import { getEffectiveMessagesForContextStats } from '../utils/contextCompaction';
 import { resolveSessionTitle } from '../utils/sessionTitle';
+import { buildSessionHistoryDetails } from '../utils/sessionHistory';
 
 interface ChatStreamEvent {
   runId: string;
@@ -59,8 +61,11 @@ interface ChatStreamEvent {
 
 interface AdventureUiState {
   isArchiveModalOpen: boolean;
+  isSaveChoiceOpen: boolean;
   isAnalyzing: boolean;
   isSavingConversation: boolean;
+  saveChoiceTitle: string;
+  saveChoiceOverwriteAvailable: boolean;
   archiveAnalyses: Record<string, any>;
   selectedTargetCardId: string;
   editedTitle: string;
@@ -154,6 +159,7 @@ const useAdventureView = () => {
 
   const activeRunRef = useRef(activeRun);
   const messagesRef = useRef(messages);
+  const sessionsRef = useRef(sessions);
   const sessionIdRef = useRef(sessionId);
   const sessionTitleRef = useRef(sessionTitle);
   const isSessionArchivedRef = useRef(isSessionArchived);
@@ -162,8 +168,11 @@ const useAdventureView = () => {
 
   const [uiState, , setUiField] = useStateGroup<AdventureUiState>({
     isArchiveModalOpen: false,
+    isSaveChoiceOpen: false,
     isAnalyzing: false,
     isSavingConversation: false,
+    saveChoiceTitle: '',
+    saveChoiceOverwriteAvailable: false,
     archiveAnalyses: {},
     selectedTargetCardId: '',
     editedTitle: '',
@@ -180,8 +189,11 @@ const useAdventureView = () => {
   });
   const {
     isArchiveModalOpen,
+    isSaveChoiceOpen,
     isAnalyzing,
     isSavingConversation,
+    saveChoiceTitle,
+    saveChoiceOverwriteAvailable,
     archiveAnalyses,
     selectedTargetCardId,
     editedTitle,
@@ -197,8 +209,11 @@ const useAdventureView = () => {
     isHistoryOpen,
   } = uiState;
   const setIsArchiveModalOpen = (isArchiveModalOpen: boolean) => setUiField('isArchiveModalOpen', isArchiveModalOpen);
+  const setIsSaveChoiceOpen = (isSaveChoiceOpen: boolean) => setUiField('isSaveChoiceOpen', isSaveChoiceOpen);
   const setIsAnalyzing = (isAnalyzing: boolean) => setUiField('isAnalyzing', isAnalyzing);
   const setIsSavingConversation = (isSavingConversation: boolean) => setUiField('isSavingConversation', isSavingConversation);
+  const setSaveChoiceTitle = (saveChoiceTitle: string) => setUiField('saveChoiceTitle', saveChoiceTitle);
+  const setSaveChoiceOverwriteAvailable = (saveChoiceOverwriteAvailable: boolean) => setUiField('saveChoiceOverwriteAvailable', saveChoiceOverwriteAvailable);
   const setArchiveAnalyses = (archiveAnalyses: Record<string, any>) => setUiField('archiveAnalyses', archiveAnalyses);
   const setSelectedTargetCardId = (selectedTargetCardId: string) => setUiField('selectedTargetCardId', selectedTargetCardId);
   const setEditedTitle = (editedTitle: string) => setUiField('editedTitle', editedTitle);
@@ -216,6 +231,7 @@ const useAdventureView = () => {
 
   useEffect(() => { activeRunRef.current = activeRun; }, [activeRun]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { sessionsRef.current = sessions; }, [sessions]);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
   useEffect(() => { sessionTitleRef.current = sessionTitle; }, [sessionTitle]);
   useEffect(() => { isSessionArchivedRef.current = isSessionArchived; }, [isSessionArchived]);
@@ -226,8 +242,11 @@ const useAdventureView = () => {
     try {
       const summaries = await invoke<AgentSessionSummary[]>('list_agent_sessions', { prefix: 'story-session-', sessionKind: 'story' });
       setSessions(summaries);
+      sessionsRef.current = summaries;
+      return summaries;
     } catch (err) {
       console.error('读取故事会话失败:', err);
+      return sessionsRef.current;
     }
   }, [setSessions]);
 
@@ -818,10 +837,12 @@ const useAdventureView = () => {
     return nextSessionId;
   }, [setSessionId]);
 
-  const saveCurrentSession = async (title = sessionTitleRef.current) => {
+  const saveCurrentSession = async (title = sessionTitleRef.current, sessionIdOverride?: string) => {
     const userMessages = messagesRef.current.filter(m => m.role === 'user');
     if (userMessages.length === 0) return false;
-    const currentSessionId = ensureCurrentSessionId();
+    const currentSessionId = sessionIdOverride
+      ? ensureSessionId(sessionIdOverride, 'story-session')
+      : ensureCurrentSessionId();
 
     try {
       await invoke<AgentSessionSummary>('save_agent_session', {
@@ -842,7 +863,7 @@ const useAdventureView = () => {
         }
       });
       await refreshSessions();
-      return true;
+      return currentSessionId;
     } catch (err) {
       console.error('保存故事会话失败:', err);
       return false;
@@ -881,11 +902,36 @@ const useAdventureView = () => {
       });
       sessionTitleRef.current = finalTitle;
       setSessionTitle(finalTitle);
-      const saved = await saveCurrentSession(finalTitle);
-      if (!saved) {
+      const latestSessions = await refreshSessions();
+      setSaveChoiceTitle(finalTitle);
+      setSaveChoiceOverwriteAvailable(latestSessions.length > 0);
+      setIsSaveChoiceOpen(true);
+    } catch (err) {
+      console.error('保存对话失败:', err);
+      message.error(`保存对话失败：${String(err)}`);
+    } finally {
+      setIsSavingConversation(false);
+    }
+  };
+
+  const handleConfirmSaveChoice = async ({ mode, name, targetId }: SaveChoiceConfirmPayload) => {
+    const finalTitle = name || saveChoiceTitle || sessionTitleRef.current || '未命名故事';
+    const targetSessionId = mode === 'create'
+      ? createSessionId('story-session')
+      : targetId || ensureCurrentSessionId();
+
+    setIsSavingConversation(true);
+    try {
+      const savedSessionId = await saveCurrentSession(finalTitle, targetSessionId);
+      if (!savedSessionId) {
         message.error('保存对话失败，请稍后重试');
         return;
       }
+      sessionIdRef.current = savedSessionId;
+      sessionTitleRef.current = finalTitle;
+      setSessionId(savedSessionId);
+      setSessionTitle(finalTitle);
+      setIsSaveChoiceOpen(false);
       message.success('对话已保存');
     } catch (err) {
       console.error('保存对话失败:', err);
@@ -1116,6 +1162,30 @@ const useAdventureView = () => {
 
   return (
     <div className="agent-chat" style={{ height: '100%', display: 'flex', flexDirection: 'column', background: '#faf9f5' }}>
+
+      <SaveChoiceModal
+        open={isSaveChoiceOpen}
+        title="保存对话"
+        nameLabel="会话名称"
+        initialName={saveChoiceTitle || sessionTitle}
+        loading={isSavingConversation}
+        overwriteAvailable={saveChoiceOverwriteAvailable}
+        overwriteTargetLabel="覆盖记录"
+        overwriteTargets={sessions.map((session) => {
+          const targetInfo = buildSessionHistoryDetails(session, worldBooks, characterCards);
+          return {
+            value: session.id,
+            label: session.title || '未命名故事',
+            description: targetInfo.description,
+            details: targetInfo.details,
+          };
+        })}
+        initialOverwriteTargetId={
+          sessions.some((session) => session.id === sessionId) ? sessionId : sessions[0]?.id || null
+        }
+        onCancel={() => setIsSaveChoiceOpen(false)}
+        onConfirm={handleConfirmSaveChoice}
+      />
 
       {/* Archive Memory Modal */}
       <Modal

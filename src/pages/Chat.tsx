@@ -27,12 +27,14 @@ import { usePartnerChatStore } from '../stores/usePartnerChatStore';
 import { Message, AgentSessionSummary, AgentSessionRecord, SessionContextCompaction } from '../stores/useAgentStore';
 import { PartnerChatSettingsModal } from '../components/PartnerChatSettingsModal';
 import { SessionHistoryModal } from '../components/SessionHistoryModal';
+import SaveChoiceModal, { type SaveChoiceConfirmPayload } from '../components/SaveChoiceModal';
 import { parseArchiveAnalysisResponse } from '../utils/archiveAnalysis';
 import { createStableContentKey } from '../utils/renderKeys';
 import { useStateGroup } from '../utils/reducerState';
-import { ensureSessionId } from '../utils/sessionIds';
+import { createSessionId, ensureSessionId } from '../utils/sessionIds';
 import { getEffectiveMessagesForContextStats } from '../utils/contextCompaction';
 import { resolveSessionTitle } from '../utils/sessionTitle';
+import { buildSessionHistoryDetails } from '../utils/sessionHistory';
 
 interface ChatStreamEvent {
   runId: string;
@@ -50,8 +52,11 @@ interface ChatUiState {
   isSettingsOpen: boolean;
   isHistoryOpen: boolean;
   isArchiveModalOpen: boolean;
+  isSaveChoiceOpen: boolean;
   isAnalyzing: boolean;
   isSavingConversation: boolean;
+  saveChoiceTitle: string;
+  saveChoiceOverwriteAvailable: boolean;
   archiveAnalysis: any;
   editedTitle: string;
   editedRelationType: string;
@@ -219,6 +224,7 @@ const useChatView = () => {
 
   const activeRunRef = useRef(activeRun);
   const messagesRef = useRef(messages);
+  const sessionsRef = useRef(sessions);
   const sessionIdRef = useRef(sessionId);
   const sessionTitleRef = useRef(sessionTitle);
   const isSessionArchivedRef = useRef(isSessionArchived);
@@ -230,8 +236,11 @@ const useChatView = () => {
     isSettingsOpen: false,
     isHistoryOpen: false,
     isArchiveModalOpen: false,
+    isSaveChoiceOpen: false,
     isAnalyzing: false,
     isSavingConversation: false,
+    saveChoiceTitle: '',
+    saveChoiceOverwriteAvailable: false,
     archiveAnalysis: null,
     editedTitle: '',
     editedRelationType: '',
@@ -245,8 +254,11 @@ const useChatView = () => {
     isSettingsOpen,
     isHistoryOpen,
     isArchiveModalOpen,
+    isSaveChoiceOpen,
     isAnalyzing,
     isSavingConversation,
+    saveChoiceTitle,
+    saveChoiceOverwriteAvailable,
     archiveAnalysis,
     editedTitle,
     editedRelationType,
@@ -259,8 +271,11 @@ const useChatView = () => {
   const setIsSettingsOpen = (isSettingsOpen: boolean) => setUiField('isSettingsOpen', isSettingsOpen);
   const setIsHistoryOpen = (isHistoryOpen: boolean) => setUiField('isHistoryOpen', isHistoryOpen);
   const setIsArchiveModalOpen = (isArchiveModalOpen: boolean) => setUiField('isArchiveModalOpen', isArchiveModalOpen);
+  const setIsSaveChoiceOpen = (isSaveChoiceOpen: boolean) => setUiField('isSaveChoiceOpen', isSaveChoiceOpen);
   const setIsAnalyzing = (isAnalyzing: boolean) => setUiField('isAnalyzing', isAnalyzing);
   const setIsSavingConversation = (isSavingConversation: boolean) => setUiField('isSavingConversation', isSavingConversation);
+  const setSaveChoiceTitle = (saveChoiceTitle: string) => setUiField('saveChoiceTitle', saveChoiceTitle);
+  const setSaveChoiceOverwriteAvailable = (saveChoiceOverwriteAvailable: boolean) => setUiField('saveChoiceOverwriteAvailable', saveChoiceOverwriteAvailable);
   const setArchiveAnalysis = (archiveAnalysis: any) => setUiField('archiveAnalysis', archiveAnalysis);
   const setEditedTitle = (editedTitle: string) => setUiField('editedTitle', editedTitle);
   const setEditedRelationType = (editedRelationType: string) => setUiField('editedRelationType', editedRelationType);
@@ -274,8 +289,11 @@ const useChatView = () => {
     try {
       const summaries = await invoke<AgentSessionSummary[]>('list_agent_sessions', { prefix: 'partner-session-' });
       setSessions(summaries);
+      sessionsRef.current = summaries;
+      return summaries;
     } catch (err) {
       console.error('读取历史会话失败:', err);
+      return sessionsRef.current;
     }
   }, [setSessions]);
 
@@ -288,10 +306,12 @@ const useChatView = () => {
     return nextSessionId;
   }, [setSessionId]);
 
-  const saveCurrentSession = useCallback(async (title = sessionTitleRef.current) => {
+  const saveCurrentSession = useCallback(async (title = sessionTitleRef.current, sessionIdOverride?: string) => {
     const userMessages = messagesRef.current.filter(m => m.role === 'user');
     if (userMessages.length === 0) return false;
-    const currentSessionId = ensureCurrentSessionId();
+    const currentSessionId = sessionIdOverride
+      ? ensureSessionId(sessionIdOverride, 'partner-session')
+      : ensureCurrentSessionId();
 
     try {
       await invoke<AgentSessionSummary>('save_agent_session', {
@@ -310,7 +330,7 @@ const useChatView = () => {
         }
       });
       await refreshSessions();
-      return true;
+      return currentSessionId;
     } catch (err) {
       console.error('保存会话失败:', err);
       return false;
@@ -319,6 +339,7 @@ const useChatView = () => {
 
   useEffect(() => { activeRunRef.current = activeRun; }, [activeRun]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { sessionsRef.current = sessions; }, [sessions]);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
   useEffect(() => { sessionTitleRef.current = sessionTitle; }, [sessionTitle]);
   useEffect(() => { isSessionArchivedRef.current = isSessionArchived; }, [isSessionArchived]);
@@ -738,11 +759,36 @@ const useChatView = () => {
       });
       sessionTitleRef.current = finalTitle;
       setSessionTitle(finalTitle);
-      const saved = await saveCurrentSession(finalTitle);
-      if (!saved) {
+      const latestSessions = await refreshSessions();
+      setSaveChoiceTitle(finalTitle);
+      setSaveChoiceOverwriteAvailable(latestSessions.length > 0);
+      setIsSaveChoiceOpen(true);
+    } catch (err) {
+      console.error('保存对话失败:', err);
+      message.error(`保存对话失败：${String(err)}`);
+    } finally {
+      setIsSavingConversation(false);
+    }
+  };
+
+  const handleConfirmSaveChoice = async ({ mode, name, targetId }: SaveChoiceConfirmPayload) => {
+    const finalTitle = name || saveChoiceTitle || sessionTitleRef.current || '未命名会话';
+    const targetSessionId = mode === 'create'
+      ? createSessionId('partner-session')
+      : targetId || ensureCurrentSessionId();
+
+    setIsSavingConversation(true);
+    try {
+      const savedSessionId = await saveCurrentSession(finalTitle, targetSessionId);
+      if (!savedSessionId) {
         message.error('保存对话失败，请稍后重试');
         return;
       }
+      sessionIdRef.current = savedSessionId;
+      sessionTitleRef.current = finalTitle;
+      setSessionId(savedSessionId);
+      setSessionTitle(finalTitle);
+      setIsSaveChoiceOpen(false);
       message.success('对话已保存');
     } catch (err) {
       console.error('保存对话失败:', err);
@@ -951,6 +997,30 @@ const useChatView = () => {
       <PartnerChatSettingsModal
         open={isSettingsOpen}
         onCancel={() => setIsSettingsOpen(false)}
+      />
+
+      <SaveChoiceModal
+        open={isSaveChoiceOpen}
+        title="保存对话"
+        nameLabel="会话名称"
+        initialName={saveChoiceTitle || sessionTitle}
+        loading={isSavingConversation}
+        overwriteAvailable={saveChoiceOverwriteAvailable}
+        overwriteTargetLabel="覆盖记录"
+        overwriteTargets={sessions.map((session) => {
+          const targetInfo = buildSessionHistoryDetails(session, worldBooks, characterCards);
+          return {
+            value: session.id,
+            label: session.title || '未命名会话',
+            description: targetInfo.description,
+            details: targetInfo.details,
+          };
+        })}
+        initialOverwriteTargetId={
+          sessions.some((session) => session.id === sessionId) ? sessionId : sessions[0]?.id || null
+        }
+        onCancel={() => setIsSaveChoiceOpen(false)}
+        onConfirm={handleConfirmSaveChoice}
       />
 
       {/* Archive Memory Modal */}

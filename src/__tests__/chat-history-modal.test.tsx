@@ -203,6 +203,8 @@ describe('Chat history modal', () => {
     render(<Chat />);
 
     fireEvent.click(screen.getByRole('button', { name: /保存对话/ }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('保存对话');
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith(
@@ -214,6 +216,93 @@ describe('Chat history modal', () => {
           }),
         }),
       );
+    });
+  });
+
+  it('opens a save choice modal and saves chat as a new editable record', async () => {
+    usePartnerChatStore.setState({
+      sessionId: 'partner-session-draft',
+      sessionTitle: '新聊天',
+      messages: [{ id: 'm1', role: 'user', content: '请记住今晚的雾城', tools: [] }],
+      selectedWorldBookId: worldBook.id,
+      selectedCharacterCardId: characterCard.id,
+    });
+    render(<Chat />);
+
+    fireEvent.click(screen.getByRole('button', { name: /保存对话/ }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('保存对话');
+    expect(invokeMock).not.toHaveBeenCalledWith('save_agent_session', expect.anything());
+    expect(screen.getByLabelText('覆盖原记录')).not.toBeDisabled();
+    expect(screen.getByLabelText('覆盖记录')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('保存为新记录'));
+
+    const titleInput = screen.getByRole('textbox', { name: '会话名称' });
+    fireEvent.change(titleInput, { target: { value: '雾城分支存档' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
+
+    await waitFor(() => {
+      const saveCall = invokeMock.mock.calls.find(([command]) => command === 'save_agent_session');
+      const saveArgs = saveCall?.[1] as any;
+      expect(saveArgs.session.id).toMatch(/^partner-session-/);
+      expect(saveArgs.session.id).not.toBe('partner-session-draft');
+      expect(saveArgs.session.title).toBe('雾城分支存档');
+      expect(usePartnerChatStore.getState().sessionId).toBe(saveArgs.session.id);
+      expect(usePartnerChatStore.getState().sessionTitle).toBe('雾城分支存档');
+    });
+  });
+
+  it('allows a draft chat to overwrite an existing history record', async () => {
+    usePartnerChatStore.setState({
+      sessionId: 'partner-session-draft',
+      sessionTitle: '新聊天',
+      messages: [{ id: 'm1', role: 'user', content: '覆盖旧的雾城记录', tools: [] }],
+      selectedWorldBookId: worldBook.id,
+      selectedCharacterCardId: characterCard.id,
+    });
+    render(<Chat />);
+    await waitFor(() => {
+      expect(usePartnerChatStore.getState().sessions.length).toBeGreaterThan(0);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /保存对话/ }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('保存对话');
+    expect(screen.getByLabelText('覆盖原记录')).not.toBeDisabled();
+    expect(screen.getByText('雾城夜谈')).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByLabelText('覆盖记录'));
+    expect(await screen.findAllByText(/保存于/)).not.toHaveLength(0);
+    expect(screen.getAllByText('世界书：雾城世界').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('角色卡：洛桑').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
+
+    await waitFor(() => {
+      const saveCall = invokeMock.mock.calls.find(([command]) => command === 'save_agent_session');
+      const saveArgs = saveCall?.[1] as any;
+      expect(saveArgs.session.id).toBe('partner-session-1');
+      expect(usePartnerChatStore.getState().sessionId).toBe('partner-session-1');
+    });
+  });
+
+  it('overwrites the existing chat record from the save choice modal', async () => {
+    usePartnerChatStore.setState({
+      sessionId: 'partner-session-1',
+      sessionTitle: '雾城夜谈',
+      messages: [{ id: 'm1', role: 'user', content: '继续说', tools: [] }],
+      selectedWorldBookId: worldBook.id,
+      selectedCharacterCardId: characterCard.id,
+    });
+    render(<Chat />);
+    await waitFor(() => {
+      expect(usePartnerChatStore.getState().sessions.some((item) => item.id === 'partner-session-1')).toBe(true);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /保存对话/ }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('保存对话');
+    fireEvent.click(screen.getByLabelText('覆盖原记录'));
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
+
+    await waitFor(() => {
+      const saveCall = invokeMock.mock.calls.find(([command]) => command === 'save_agent_session');
+      expect((saveCall?.[1] as any).session.id).toBe('partner-session-1');
     });
   });
 
@@ -251,6 +340,8 @@ describe('Chat history modal', () => {
     render(<Chat />);
 
     fireEvent.click(screen.getByRole('button', { name: /保存对话/ }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('保存对话');
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith(
@@ -278,6 +369,8 @@ describe('Chat history modal', () => {
     render(<Chat />);
 
     fireEvent.click(screen.getByRole('button', { name: /保存对话/ }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('保存对话');
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith(
@@ -299,6 +392,8 @@ describe('Chat history modal', () => {
     render(<Chat />);
 
     fireEvent.click(screen.getByRole('button', { name: /保存对话/ }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('保存对话');
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
 
     await waitFor(() => {
       const saveCall = invokeMock.mock.calls.find(([command]) => command === 'save_agent_session');

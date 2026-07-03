@@ -176,7 +176,12 @@ function resetStoryBookTravelStores() {
     dynamicRoleLoadingEnabled: false,
   });
   useBookTravelStore.getState().resetSession();
-  useBookTravelStore.setState({ assembledMaterials: [], selectedMaterialId: null });
+  useBookTravelStore.setState({
+    assembledMaterials: [],
+    selectedMaterialId: null,
+    savedProgresses: [],
+    activeSavedProgressId: null,
+  });
   invokeMock.mockClear();
   invokeMock.mockImplementation(defaultInvoke);
 }
@@ -734,7 +739,7 @@ describe('Story book-travel mode', () => {
     expect(screen.getByText('场景目标：')).toHaveStyle({ color: '#d97757' });
   });
 
-  it('uses the current scene title when saving book-travel progress', () => {
+  it('opens a save choice modal and saves book-travel progress as a new editable record', async () => {
     const materialId = saveReadyMaterial();
     setActiveBookTravelScene();
     useBookTravelStore.setState({ selectedMaterialId: materialId });
@@ -742,9 +747,68 @@ describe('Story book-travel mode', () => {
     renderWithRouter(<Story />);
 
     fireEvent.click(screen.getByRole('button', { name: '保存进度' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('保存进度');
+    expect(screen.getByLabelText('覆盖原记录')).toBeDisabled();
+    fireEvent.change(screen.getByRole('textbox', { name: '进度名称' }), {
+      target: { value: '沈府婚宴分支' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
 
-    expect(useBookTravelStore.getState().savedProgresses[0]?.title).toBe('沈府婚宴');
-    expect(useBookTravelStore.getState().savedProgresses[0]?.materialId).toBe(materialId);
+    await waitFor(() => {
+      expect(useBookTravelStore.getState().savedProgresses[0]?.title).toBe('沈府婚宴分支');
+      expect(useBookTravelStore.getState().savedProgresses[0]?.materialId).toBe(materialId);
+      expect(useBookTravelStore.getState().activeSavedProgressId).toBe(useBookTravelStore.getState().savedProgresses[0]?.id);
+    });
+  });
+
+  it('overwrites the active book-travel progress without adding a duplicate', async () => {
+    const materialId = saveReadyMaterial();
+    setActiveBookTravelScene();
+    useBookTravelStore.setState({ selectedMaterialId: materialId });
+    const progressId = useBookTravelStore.getState().saveProgress({ mode: 'create', title: '旧进度' });
+
+    renderWithRouter(<Story />);
+
+    fireEvent.click(screen.getByRole('button', { name: '保存进度' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('保存进度');
+    fireEvent.click(screen.getByLabelText('覆盖原记录'));
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
+
+    await waitFor(() => {
+      const progresses = useBookTravelStore.getState().savedProgresses;
+      expect(progresses).toHaveLength(1);
+      expect(progresses[0].id).toBe(progressId);
+      expect(progresses[0].title).toBe('沈府婚宴');
+      expect(useBookTravelStore.getState().activeSavedProgressId).toBe(progressId);
+    });
+  });
+
+  it('allows a draft book-travel session to overwrite an existing saved progress', async () => {
+    const materialId = saveReadyMaterial();
+    setActiveBookTravelScene();
+    useBookTravelStore.setState({ selectedMaterialId: materialId });
+    const progressId = useBookTravelStore.getState().saveProgress({ mode: 'create', title: '旧进度' });
+    useBookTravelStore.setState({ activeSavedProgressId: null });
+
+    renderWithRouter(<Story />);
+
+    fireEvent.click(screen.getByRole('button', { name: '保存进度' }));
+    expect(await screen.findByRole('dialog')).toHaveTextContent('保存进度');
+    expect(screen.getByLabelText('覆盖原记录')).not.toBeDisabled();
+    expect(screen.getByText('旧进度')).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByLabelText('覆盖进度'));
+    expect(await screen.findAllByText(/保存于/)).not.toHaveLength(0);
+    expect(screen.getByText('穿书素材：第一卷 · 云州入场')).toBeInTheDocument();
+    expect(screen.getByText('世界书：云州世界书')).toBeInTheDocument();
+    expect(screen.getByText('角色卡：沈霜')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '确认保存' }));
+
+    await waitFor(() => {
+      const progresses = useBookTravelStore.getState().savedProgresses;
+      expect(progresses).toHaveLength(1);
+      expect(progresses[0].id).toBe(progressId);
+      expect(useBookTravelStore.getState().activeSavedProgressId).toBe(progressId);
+    });
   });
 
   it('opens saved book-travel progress in a modal with material filtering and fallback labels', async () => {
