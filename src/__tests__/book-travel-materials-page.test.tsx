@@ -4,6 +4,27 @@ import BookTravelMaterials from '../pages/BookTravelMaterials';
 import { useBookTravelStore } from '../stores/useBookTravelStore';
 import { usePartnerStore } from '../stores/usePartnerStore';
 
+function emitBookTravelStreamDone(runId: string, message: unknown) {
+  const scheduleImmediate = Reflect.get(globalThis, 'setImmediate') as
+    | ((callback: () => void) => void)
+    | undefined;
+  const emit = () => {
+    const handlers = (globalThis as any).eventHandlers?.['book-travel-stream'] || [];
+    handlers.forEach((handler: any) => handler({
+      payload: {
+        runId,
+        eventType: 'done',
+        message: JSON.stringify(message),
+      },
+    }));
+  };
+  if (scheduleImmediate) {
+    scheduleImmediate(emit);
+  } else {
+    setTimeout(emit, 0);
+  }
+}
+
 const invokeMock = vi.fn(async (command: string, args?: any) => {
   if (command === 'get_workspace_dir' && args?.dirType === 'outline') return '/outline';
   if (command === 'list_dir' && args?.path === '/outline') {
@@ -17,36 +38,18 @@ const invokeMock = vi.fn(async (command: string, args?: any) => {
   }
   if (command === 'read_file' && args?.path === '/outline/长篇/第一卷.md') return '第一卷大纲正文';
   if (command === 'start_assemble_book_travel_materials_stream') {
-    setTimeout(() => {
-      const handlers = (globalThis as any).eventHandlers?.['book-travel-stream'] || [];
-      handlers.forEach((handler: any) => handler({
-        payload: {
-          runId: 'assemble-run',
-          eventType: 'done',
-          message: JSON.stringify({
-            assembledWorldModel: { originalTimeline: ['小说开篇'] },
-            stableMemory: { worldRules: ['原书因果有效'] },
-            volatileMemory: { clues: [] },
-          }),
-        },
-      }));
-    }, 5);
+    emitBookTravelStreamDone('assemble-run', {
+      assembledWorldModel: { originalTimeline: ['小说开篇'] },
+      stableMemory: { worldRules: ['原书因果有效'] },
+      volatileMemory: { clues: [] },
+    });
     return { runId: 'assemble-run' };
   }
   if (command === 'start_generate_book_travel_entry_setup_stream') {
-    setTimeout(() => {
-      const handlers = (globalThis as any).eventHandlers?.['book-travel-stream'] || [];
-      handlers.forEach((handler: any) => handler({
-        payload: {
-          runId: 'entry-run',
-          eventType: 'done',
-          message: JSON.stringify({
-            entryPoints: [{ id: 'entry-start', title: '小说开篇', summary: '从第一章开始进入' }],
-            recommendedUserCharacters: [{ name: '林晚', identity: '穿书者', goal: '改写死局' }],
-          }),
-        },
-      }));
-    }, 5);
+    emitBookTravelStreamDone('entry-run', {
+      entryPoints: [{ id: 'entry-start', title: '小说开篇', summary: '从第一章开始进入' }],
+      recommendedUserCharacters: [{ name: '林晚', identity: '穿书者', goal: '改写死局' }],
+    });
     return { runId: 'entry-run' };
   }
   return undefined;
