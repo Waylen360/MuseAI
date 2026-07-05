@@ -152,6 +152,8 @@ If macOS says the app is damaged and cannot be opened, run this command in Termi
 xattr -dr com.apple.quarantine /Applications/MuseAI.app
 ```
 
+If a feature stops working after updating MuseAI, open Settings, find the system prompt for the matching module, click "Restore Default", and try again.
+
 ### 2. Configure an AI Model
 
 On first launch, open Settings and configure your model:
