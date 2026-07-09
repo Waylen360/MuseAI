@@ -179,10 +179,6 @@ You can configure different models and parameters for companion chat, adventures
 
 ## Interface Preview
 
-![MuseAI home overview: AI companion, adventure, story-world isekai, bond, and creative tool entries](assets/首页.png)
-
-*The home screen highlights AI companion, adventure, bond, story-world isekai, and creative tool entries.*
-
 ![MuseAI companion interface: long-running AI character chat bound to a character card](assets/聊天页.png)
 
 *Companion Chat: maintain an ongoing relationship with the characters you create.*

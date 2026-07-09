@@ -179,10 +179,6 @@ xattr -dr com.apple.quarantine /Applications/MuseAI.app
 
 ## 界面一览
 
-![MuseAI 首页总览：AI 伴侣、冒险、穿书、羁绊和创作模块入口](assets/首页.png)
-
-*首页集中展示 AI 伴侣、冒险、羁绊、穿书和创作工具入口。*
-
 ![MuseAI 智能伴侣界面：与角色卡绑定的 AI 角色持续对话](assets/聊天页.png)
 
 *智能伴侣：与你创建的角色展开长期对话。*
