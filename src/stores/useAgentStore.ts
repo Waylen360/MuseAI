@@ -66,6 +66,9 @@ export interface AgentSessionRecord extends AgentSessionSummary {
   characterCardIds?: string[] | null;
   selectedWorldBookId?: string | null;
   dynamicRoleLoadingEnabled?: boolean;
+  selectedStylePresetIds?: string[];
+  initialStylePresetIds?: string[];
+  initialSystemPromptSnapshot?: string | null;
   bookTravelState?: unknown;
 }
 

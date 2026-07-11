@@ -46,6 +46,9 @@ import { createSessionId, ensureSessionId } from '../utils/sessionIds';
 import { getEffectiveMessagesForContextStats } from '../utils/contextCompaction';
 import { resolveSessionTitle } from '../utils/sessionTitle';
 import { buildSessionHistoryDetails } from '../utils/sessionHistory';
+import { StylePresetSelector } from '../components/StylePresetSelector';
+import { useStylePresetStore } from '../stores/useStylePresetStore';
+import { prependStylePresets } from '../utils/stylePresets';
 
 interface ChatStreamEvent {
   runId: string;
@@ -146,6 +149,8 @@ const useAdventureView = () => {
     initialPlot, setInitialPlot,
     contextCompaction, setContextCompaction,
     dynamicRoleLoadingEnabled, setDynamicRoleLoadingEnabled,
+    selectedStylePresetIds, setSelectedStylePresetIds,
+    initialStylePresetIds, initialSystemPromptSnapshot, setInitialStylePresetSnapshot,
     createNewSession
   } = useStoryStore();
 
@@ -153,6 +158,7 @@ const useAdventureView = () => {
 
   const { userInfo: partnerChatUserInfo } = usePartnerChatStore();
   const settings = useSettingsStore();
+  const stylePresets = useStylePresetStore((state) => state.presets);
 
   const chatHistoryRef = useRef<HTMLDivElement>(null);
   const currentThinkingIdRef = useRef<string | null>(null);
@@ -165,6 +171,9 @@ const useAdventureView = () => {
   const isSessionArchivedRef = useRef(isSessionArchived);
   const selectedCharacterCardIdsRef = useRef(selectedCharacterCardIds);
   const contextCompactionRef = useRef<SessionContextCompaction | null>(contextCompaction);
+  const selectedStylePresetIdsRef = useRef(selectedStylePresetIds);
+  const initialStylePresetIdsRef = useRef(initialStylePresetIds);
+  const initialSystemPromptSnapshotRef = useRef(initialSystemPromptSnapshot);
 
   const [uiState, , setUiField] = useStateGroup<AdventureUiState>({
     isArchiveModalOpen: false,
@@ -237,6 +246,9 @@ const useAdventureView = () => {
   useEffect(() => { isSessionArchivedRef.current = isSessionArchived; }, [isSessionArchived]);
   useEffect(() => { selectedCharacterCardIdsRef.current = selectedCharacterCardIds; }, [selectedCharacterCardIds]);
   useEffect(() => { contextCompactionRef.current = contextCompaction; }, [contextCompaction]);
+  useEffect(() => { selectedStylePresetIdsRef.current = selectedStylePresetIds; }, [selectedStylePresetIds]);
+  useEffect(() => { initialStylePresetIdsRef.current = initialStylePresetIds; }, [initialStylePresetIds]);
+  useEffect(() => { initialSystemPromptSnapshotRef.current = initialSystemPromptSnapshot; }, [initialSystemPromptSnapshot]);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -476,9 +488,10 @@ const useAdventureView = () => {
   } : null;
 
   // Compile final Prompt
-  const baseSystemPrompt = dynamicRoleLoadingEnabled
+  const adventureBaseSystemPrompt = dynamicRoleLoadingEnabled
     ? settings.storyDynamicAgentPrompt || ''
     : settings.storyAgentPrompt || '';
+  const baseSystemPrompt = prependStylePresets(adventureBaseSystemPrompt, stylePresets, selectedStylePresetIds);
   const effectiveSystemPrompt = compileStorySystemPrompt({
     basePrompt: baseSystemPrompt,
     worldBookContent: selectedWorldBook ? selectedWorldBook.content : null,
@@ -502,6 +515,10 @@ const useAdventureView = () => {
 
     // Reset book-travel state to ensure page isolation
     useBookTravelStore.getState().resetSession();
+    const initialIds = [...selectedStylePresetIdsRef.current];
+    setInitialStylePresetSnapshot(initialIds, effectiveSystemPrompt);
+    initialStylePresetIdsRef.current = initialIds;
+    initialSystemPromptSnapshotRef.current = effectiveSystemPrompt;
 
     const formattedPlot = initialPlot.trim();
     const userMessage: Message = {
@@ -860,6 +877,9 @@ const useAdventureView = () => {
           selectedWorldBookId,
           dynamicRoleLoadingEnabled,
           characterCardIds: selectedCharacterCardIdsRef.current,
+          selectedStylePresetIds: selectedStylePresetIdsRef.current,
+          initialStylePresetIds: initialStylePresetIdsRef.current,
+          initialSystemPromptSnapshot: initialSystemPromptSnapshotRef.current,
         }
       });
       await refreshSessions();
@@ -952,6 +972,8 @@ const useAdventureView = () => {
       setSelectedWorldBookId(session.selectedWorldBookId ?? null);
       setSelectedCharacterCardIds(session.characterCardIds ?? []);
       setDynamicRoleLoadingEnabled(session.dynamicRoleLoadingEnabled ?? false);
+      setSelectedStylePresetIds(session.selectedStylePresetIds ?? []);
+      setInitialStylePresetSnapshot(session.initialStylePresetIds ?? [], session.initialSystemPromptSnapshot ?? '');
       // reset any book-travel state if needed
       contextCompactionRef.current = session.contextCompaction ?? null;
       setContextCompaction(session.contextCompaction ?? null);
@@ -1455,8 +1477,8 @@ const useAdventureView = () => {
                 icon={<InfoCircleOutlined />}
                 variant="thinking"
                 title={dynamicRoleLoadingEnabled ? '冒险设定系统提示词（角色卡动态加载）' : '冒险设定系统提示词（已融汇世界书与多角色卡）'}
-                preview={effectiveSystemPrompt.slice(0, 80) + (effectiveSystemPrompt.length > 80 ? '...' : '')}
-                detail={effectiveSystemPrompt}
+                preview={(hasMessages && initialSystemPromptSnapshot ? initialSystemPromptSnapshot : effectiveSystemPrompt).slice(0, 80) + ((hasMessages && initialSystemPromptSnapshot ? initialSystemPromptSnapshot : effectiveSystemPrompt).length > 80 ? '...' : '')}
+                detail={hasMessages && initialSystemPromptSnapshot ? initialSystemPromptSnapshot : effectiveSystemPrompt}
                 expanded={Boolean(expandedBlocks['story-system-prompt'])}
                 onToggle={() => toggleBlock('story-system-prompt')}
               />
@@ -1749,6 +1771,8 @@ const useAdventureView = () => {
                 </div>
               )}
             </div>
+
+            <StylePresetSelector target="adventure" value={selectedStylePresetIds[0] || null} onChange={(id) => setSelectedStylePresetIds(id ? [id] : [])} />
 
             {/* Initial Plot TextArea */}
             <div>

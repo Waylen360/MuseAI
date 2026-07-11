@@ -20,6 +20,9 @@ interface StoryState {
   initialPlot: string;
   contextCompaction: SessionContextCompaction | null;
   dynamicRoleLoadingEnabled: boolean;
+  selectedStylePresetIds: string[];
+  initialStylePresetIds: string[];
+  initialSystemPromptSnapshot: string | null;
 
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   setInput: (input: string) => void;
@@ -36,6 +39,8 @@ interface StoryState {
   setInitialPlot: (plot: string) => void;
   setContextCompaction: (contextCompaction: SessionContextCompaction | null) => void;
   setDynamicRoleLoadingEnabled: (enabled: boolean) => void;
+  setSelectedStylePresetIds: (ids: string[]) => void;
+  setInitialStylePresetSnapshot: (ids: string[], prompt: string) => void;
   createNewSession: () => void;
 }
 
@@ -57,6 +62,9 @@ export const useStoryStore = create<StoryState>()(
       initialPlot: '',
       contextCompaction: null,
       dynamicRoleLoadingEnabled: false,
+      selectedStylePresetIds: [],
+      initialStylePresetIds: [],
+      initialSystemPromptSnapshot: null,
 
       setMessages: (updater) => set((state) => ({
         messages: typeof updater === 'function' ? updater(state.messages) : updater,
@@ -77,6 +85,8 @@ export const useStoryStore = create<StoryState>()(
       setInitialPlot: (initialPlot) => set({ initialPlot }),
       setContextCompaction: (contextCompaction) => set({ contextCompaction }),
       setDynamicRoleLoadingEnabled: (dynamicRoleLoadingEnabled) => set({ dynamicRoleLoadingEnabled }),
+      setSelectedStylePresetIds: (selectedStylePresetIds) => set({ selectedStylePresetIds: selectedStylePresetIds.slice(-1) }),
+      setInitialStylePresetSnapshot: (initialStylePresetIds, initialSystemPromptSnapshot) => set({ initialStylePresetIds, initialSystemPromptSnapshot }),
 
       createNewSession: () => {
         set(() => ({
@@ -92,6 +102,9 @@ export const useStoryStore = create<StoryState>()(
           initialPlot: '',
           contextCompaction: null,
           dynamicRoleLoadingEnabled: false,
+          selectedStylePresetIds: [],
+          initialStylePresetIds: [],
+          initialSystemPromptSnapshot: null,
         }));
       },
     }),
@@ -106,6 +119,9 @@ export const useStoryStore = create<StoryState>()(
           selectedCharacterCardIds: state?.selectedCharacterCardIds ?? currentState.selectedCharacterCardIds,
           initialPlot: state?.initialPlot ?? currentState.initialPlot,
           dynamicRoleLoadingEnabled: state?.dynamicRoleLoadingEnabled ?? currentState.dynamicRoleLoadingEnabled,
+          selectedStylePresetIds: Array.isArray(state?.selectedStylePresetIds) ? state.selectedStylePresetIds.slice(-1) : [],
+          initialStylePresetIds: Array.isArray(state?.initialStylePresetIds) ? state.initialStylePresetIds : [],
+          initialSystemPromptSnapshot: typeof state?.initialSystemPromptSnapshot === 'string' ? state.initialSystemPromptSnapshot : null,
         };
       },
       partialize: (state) => ({
@@ -113,6 +129,9 @@ export const useStoryStore = create<StoryState>()(
         selectedCharacterCardIds: state.selectedCharacterCardIds,
         initialPlot: state.initialPlot,
         dynamicRoleLoadingEnabled: state.dynamicRoleLoadingEnabled,
+        selectedStylePresetIds: state.selectedStylePresetIds,
+        initialStylePresetIds: state.initialStylePresetIds,
+        initialSystemPromptSnapshot: state.initialSystemPromptSnapshot,
       }),
     }
   )

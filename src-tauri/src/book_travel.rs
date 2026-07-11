@@ -595,11 +595,12 @@ async fn execute_book_travel_stream(
                 return Err(format!("Anthropic 接口请求失败：{} {}", status, body_text));
             }
 
-            let mut stream = response.bytes_stream();
-            let mut buffer = String::new();
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+        let mut utf8_decoder = crate::llm::Utf8StreamDecoder::default();
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|e| format!("网络流读取失败：{}", e))?;
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                utf8_decoder.push_to(&chunk, &mut buffer);
                 crate::llm::process_sse_buffer(&mut buffer, |data| {
                     if let Some(crate::models::AnthropicStreamEvent::Text(delta)) = crate::llm::parse_anthropic_stream_event(data) {
                         full_content.push_str(&delta);
@@ -650,11 +651,12 @@ async fn execute_book_travel_stream(
                 return Err(format!("OpenAI 兼容接口请求失败：{} {}", status, body_text));
             }
 
-            let mut stream = response.bytes_stream();
-            let mut buffer = String::new();
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+        let mut utf8_decoder = crate::llm::Utf8StreamDecoder::default();
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|e| format!("网络流读取失败：{}", e))?;
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                utf8_decoder.push_to(&chunk, &mut buffer);
                 crate::llm::process_sse_buffer(&mut buffer, |data| {
                     if data == "[DONE]" {
                         return;
@@ -1425,7 +1427,7 @@ mod tests {
     fn scene_writer_prompt_uses_writer_role_and_full_runtime_context() {
         let request = sample_request(
             BookTravelRole::SceneWriter,
-            "场景写手系统提示词",
+            "穿书预设正文\n\n场景写手系统提示词",
             0.8,
             8192,
             Some(64000),
@@ -1436,7 +1438,7 @@ mod tests {
             .expect("scene writer call should build");
 
         assert_eq!(call.role, BookTravelRole::SceneWriter);
-        assert_eq!(call.system_prompt, "场景写手系统提示词");
+        assert_eq!(call.system_prompt, "穿书预设正文\n\n场景写手系统提示词");
         assert_eq!(call.max_tokens, 8192);
         assert!(call.user_prompt.contains("insert-beat"));
         assert!(call.user_prompt.contains("不得创建新场景"));

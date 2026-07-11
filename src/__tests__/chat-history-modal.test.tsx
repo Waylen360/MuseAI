@@ -5,6 +5,7 @@ import Chat from '../pages/Chat';
 import { usePartnerChatStore } from '../stores/usePartnerChatStore';
 import { usePartnerStore } from '../stores/usePartnerStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
+import { useStylePresetStore } from '../stores/useStylePresetStore';
 
 const worldBook = {
   id: 'wb-chat-1',
@@ -90,6 +91,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 }));
 
 function resetStores() {
+  useStylePresetStore.setState({ presets: [] });
   sessionSummaries = [
     {
       id: 'partner-session-1',
@@ -133,6 +135,9 @@ function resetStores() {
     activeRun: { runId: null, messageId: null },
     isSessionArchived: false,
     contextCompaction: null,
+    selectedStylePresetIds: [],
+    initialStylePresetIds: [],
+    initialSystemPromptSnapshot: null,
   });
   useSettingsStore.setState({
     agentConfigs: {
@@ -154,6 +159,20 @@ describe('Chat history modal', () => {
     Modal.destroyAll();
     document.body.innerHTML = '';
     resetStores();
+  });
+
+  it('开始聊天后隐藏文风预设和伴侣设置入口', () => {
+    usePartnerChatStore.setState({
+      messages: [{ id: 'started-message', role: 'user', content: '你好', tools: [] }],
+    });
+
+    render(<Chat />);
+
+    expect(screen.queryByLabelText('聊天文风预设')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '伴侣设置' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看上下文详情' }).closest('.agent-composer__actions')).toHaveStyle({
+      justifyContent: 'flex-end',
+    });
   });
 
   it('renders session metadata, filters by World Book and Character Card, loads, and deletes from the modal', async () => {
@@ -403,10 +422,14 @@ describe('Chat history modal', () => {
   });
 
   it('passes partnerChat agent id when sending desktop chat messages', async () => {
+    useStylePresetStore.setState({ presets: [
+      { id: 'chat-1', name: '克制对白', segments: [{ id: 'chat-segment-1', title: '对白', content: '聊天预设正文', enabled: true }], createdAt: 1, updatedAt: 1 },
+    ] });
     usePartnerChatStore.setState({
       input: '今晚聊聊雾城',
       selectedWorldBookId: worldBook.id,
       selectedCharacterCardId: characterCard.id,
+      selectedStylePresetIds: ['chat-1'],
     });
     const { container } = render(<Chat />);
 
@@ -423,9 +446,11 @@ describe('Chat history modal', () => {
             frequencyPenalty: 0.55,
             presencePenalty: 0.45,
             topP: 0.75,
+            systemPrompt: expect.stringMatching(/聊天预设正文[\s\S]*伴侣/),
           }),
         }),
       );
     });
+    expect(usePartnerChatStore.getState().initialSystemPromptSnapshot).toContain('聊天预设正文');
   });
 });

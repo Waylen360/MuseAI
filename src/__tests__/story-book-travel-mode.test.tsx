@@ -6,6 +6,7 @@ import Story from '../pages/Story';
 import { usePartnerStore } from '../stores/usePartnerStore';
 import { useStoryStore } from '../stores/useStoryStore';
 import { useBookTravelStore, type BookTravelSnapshot } from '../stores/useBookTravelStore';
+import { useStylePresetStore } from '../stores/useStylePresetStore';
 
 function renderWithRouter(ui: React.ReactElement) {
   return render(<MemoryRouter>{ui}</MemoryRouter>);
@@ -284,6 +285,9 @@ function getCurrentBookTravelSnapshot(overrides: Partial<BookTravelSnapshot> = {
     ending: state.ending,
     input: state.input,
     inputMode: state.inputMode,
+    selectedStylePresetIds: state.selectedStylePresetIds,
+    initialStylePresetIds: state.initialStylePresetIds,
+    initialSystemPromptSnapshot: state.initialSystemPromptSnapshot,
     ...overrides,
   };
 }
@@ -293,6 +297,19 @@ describe('Story book-travel mode', () => {
     Modal.destroyAll();
     document.body.innerHTML = '';
     resetStoryBookTravelStores();
+    useStylePresetStore.setState({ presets: [] });
+  });
+
+  it('穿书开始后隐藏文风预设修改入口', () => {
+    useStylePresetStore.setState({ presets: [
+      { id: 'book-1', name: '古典叙事', segments: [{ id: 'segment-1', title: '叙事', content: '正文', enabled: true }], createdAt: 1, updatedAt: 1 },
+    ] });
+    setActiveBookTravelScene();
+    useBookTravelStore.setState({ selectedStylePresetIds: ['book-1'] });
+
+    renderWithRouter(<Story />);
+
+    expect(screen.queryByLabelText('穿书文风预设')).not.toBeInTheDocument();
   });
 
   it('shows assembled material selection before book-travel can start', () => {
@@ -783,6 +800,21 @@ describe('Story book-travel mode', () => {
     });
   });
 
+  it('restores only the final selected book-travel preset from legacy multi-select progress', () => {
+    setActiveBookTravelScene();
+    useBookTravelStore.setState({
+      selectedStylePresetIds: ['preset-b', 'preset-a'],
+      initialStylePresetIds: ['preset-a'],
+      initialSystemPromptSnapshot: '初始化穿书提示词',
+    });
+    const progressId = useBookTravelStore.getState().saveProgress({ mode: 'create', title: '预设进度' });
+    useBookTravelStore.setState({ selectedStylePresetIds: [] });
+    useBookTravelStore.getState().loadSavedProgress(progressId);
+    expect(useBookTravelStore.getState().selectedStylePresetIds).toEqual(['preset-a']);
+    expect(useBookTravelStore.getState().initialStylePresetIds).toEqual(['preset-a']);
+    expect(useBookTravelStore.getState().initialSystemPromptSnapshot).toBe('初始化穿书提示词');
+  });
+
   it('allows a draft book-travel session to overwrite an existing saved progress', async () => {
     const materialId = saveReadyMaterial();
     setActiveBookTravelScene();
@@ -917,6 +949,24 @@ describe('Story book-travel mode', () => {
     expect(classifyCall?.[1].request.systemPrompt).toContain('{"classification":"insert-beat"}');
     expect(classifyCall?.[1].request.systemPrompt).not.toContain('reason');
     expect(classifyCall?.[1].request.systemPrompt).not.toContain('meta');
+  });
+
+  it('only prepends book-travel presets to scene-writer requests', async () => {
+    useStylePresetStore.setState({ presets: [
+      { id: 'book-1', name: '古典叙事', segments: [{ id: 'book-segment-1', title: '叙事', content: '穿书预设正文', enabled: true }], createdAt: 1, updatedAt: 1 },
+    ] });
+    setActiveBookTravelScene();
+    useBookTravelStore.getState().setSelectedStylePresetIds(['book-1']);
+    renderWithRouter(<Story />);
+
+    fireEvent.change(screen.getByPlaceholderText(/说些什么/), { target: { value: '查看状态' } });
+    fireEvent.click(document.querySelector('.de-ai-agent-run-button') as HTMLButtonElement);
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('start_write_book_travel_insert_beat_stream', expect.anything()));
+    const writerCall = invokeMock.mock.calls.find(([command]) => command === 'start_write_book_travel_insert_beat_stream');
+    const classifierCall = invokeMock.mock.calls.find(([command]) => command === 'classify_book_travel_input');
+    expect(writerCall?.[1].request.systemPrompt).toMatch(/穿书预设正文[\s\S]*穿书场景写手/);
+    expect(classifierCall?.[1].request.systemPrompt).not.toContain('穿书预设正文');
   });
 
   it('passes the selected book-travel input mode prefix into the runtime calls and turn record', async () => {

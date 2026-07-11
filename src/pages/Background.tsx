@@ -35,6 +35,9 @@ import {
 import { UNASSIGNED_CHARACTER_CARD_GROUP_ID, groupCharacterCardsByWorldBook } from '../utils/characterCardGroups';
 import { useStateGroup } from '../utils/reducerState';
 import { SillyTavernExportPreviewModal } from '../components/SillyTavernExportPreviewModal';
+import { StylePresetManager } from '../components/StylePresetManager';
+import { StylePresetEditor } from '../components/StylePresetEditor';
+import { useStylePresetStore } from '../stores/useStylePresetStore';
 
 const DIRECTORY_WIDTH = 280;
 const DEFAULT_BACKGROUND_CANCELLATION_SETTLE_MS = 15_000;
@@ -181,6 +184,8 @@ const useBackgroundView = () => {
   } = usePartnerStore();
 
   const settings = useSettingsStore();
+  const stylePresetStore = useStylePresetStore();
+  const selectedStylePreset = stylePresetStore.presets.find((preset) => preset.id === stylePresetStore.selectedPresetId) || null;
   const { importGeneratedItems } = usePartnerStore();
   const backgroundExtractionConfig = settings.agentConfigs?.backgroundExtraction || {};
   const backgroundWorldBookConfig = settings.agentConfigs?.backgroundWorldBook || {};
@@ -1051,10 +1056,14 @@ const useBackgroundView = () => {
         role="treeitem"
         aria-selected={isSelected}
         tabIndex={0}
-        onClick={() => selectItem(item.id, item.type)}
+        onClick={() => {
+          stylePresetStore.selectPreset(null);
+          selectItem(item.id, item.type);
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
+            stylePresetStore.selectPreset(null);
             selectItem(item.id, item.type);
           }
         }}
@@ -2104,6 +2113,7 @@ const useBackgroundView = () => {
 
         {/* Directory Scrollable Area */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '12px 0' }}>
+          <StylePresetManager onSelectPreset={() => selectItem(null, null)} />
           
           {/* World Book Category */}
           <div>
@@ -2126,7 +2136,10 @@ const useBackgroundView = () => {
                     type="text"
                     size="small"
                     icon={<PlusOutlined style={{ fontSize: 12 }} />}
-                    onClick={addWorldBook}
+                    onClick={() => {
+                      stylePresetStore.selectPreset(null);
+                      addWorldBook();
+                    }}
                     style={{ width: 22, height: 22, padding: 0 }}
                     className="add-category-btn"
                   />
@@ -2166,7 +2179,10 @@ const useBackgroundView = () => {
                     type="text"
                     size="small"
                     icon={<PlusOutlined style={{ fontSize: 12 }} />}
-                    onClick={addCharacterCard}
+                    onClick={() => {
+                      stylePresetStore.selectPreset(null);
+                      addCharacterCard();
+                    }}
                     style={{ width: 22, height: 22, padding: 0 }}
                     className="add-category-btn"
                   />
@@ -2194,6 +2210,7 @@ const useBackgroundView = () => {
                   onSelect={(keys) => {
                     const nextId = String(keys[0] || '');
                     if (nextId) {
+                      stylePresetStore.selectPreset(null);
                       selectItem(nextId, 'character_card');
                     }
                   }}
@@ -2213,7 +2230,30 @@ const useBackgroundView = () => {
         flexDirection: 'column', 
         overflow: 'hidden' 
       }}>
-        {selectedItem ? (
+        {selectedStylePreset ? (
+          <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%' }}>
+            <div style={{
+              padding: '12px 24px',
+              background: '#ffffff',
+              borderBottom: '1px solid rgba(0, 0, 0, 0.04)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              height: 52,
+            }}>
+              <FileProtectOutlined style={{ fontSize: 16, color: '#d97757' }} />
+              <span style={{ fontSize: 15, fontWeight: 600, color: '#33312e' }}>{selectedStylePreset.name}</span>
+              <span style={{ fontSize: 12, background: '#f2e8dc', color: '#d97757', padding: '2px 8px', borderRadius: 12, fontWeight: 500 }}>
+                文风预设
+              </span>
+            </div>
+            <div style={{ flex: 1, padding: '24px 32px 40px', overflowY: 'auto', background: '#faf9f5' }}>
+              <div style={{ maxWidth: 900, margin: '0 auto', width: '100%' }}>
+                <StylePresetEditor preset={selectedStylePreset} />
+              </div>
+            </div>
+          </div>
+        ) : selectedItem ? (
           <div style={{ 
             display: 'flex', 
             flexDirection: 'column', 
@@ -2354,7 +2394,7 @@ const useBackgroundView = () => {
               image={<CompassOutlined style={{ fontSize: 64, color: '#c0bbb4' }} />}
               description={
                 <span style={{ color: '#8c8882', fontSize: 14 }}>
-                  请在左侧目录中选择或新建一个世界书或角色卡来查看配置。
+                  请在左侧目录中选择或新建一个文风预设、世界书或角色卡来查看配置。
                 </span>
               }
             />

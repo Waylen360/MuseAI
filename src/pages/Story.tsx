@@ -36,6 +36,9 @@ import { formatHistorySavedAt, resolveBookTravelProgressMaterial } from '../util
 import { ensureSessionId } from '../utils/sessionIds';
 import { getEffectiveMessagesForContextStats } from '../utils/contextCompaction';
 import { createStableContentKey } from '../utils/renderKeys';
+import { StylePresetSelector } from '../components/StylePresetSelector';
+import { useStylePresetStore } from '../stores/useStylePresetStore';
+import { prependStylePresets } from '../utils/stylePresets';
 
 interface ChatStreamEvent {
   runId: string;
@@ -479,6 +482,12 @@ const useStoryView = () => {
 
   const { userInfo: partnerChatUserInfo } = usePartnerChatStore();
   const settings = useSettingsStore();
+  const stylePresets = useStylePresetStore((state) => state.presets);
+  const effectiveBookTravelSceneWriterPrompt = prependStylePresets(
+    settings.bookTravelSceneWriterPrompt,
+    stylePresets,
+    bookTravelStore.selectedStylePresetIds,
+  );
 
   const chatHistoryRef = useRef<HTMLDivElement>(null);
   const currentThinkingIdRef = useRef<string | null>(null);
@@ -891,7 +900,7 @@ const useStoryView = () => {
       plannedScene,
       writerInstructions,
     };
-    const writerRequest = buildBookTravelRequest('scene-writer', settings.bookTravelSceneWriterPrompt, writerConfig, materials, writerState);
+    const writerRequest = buildBookTravelRequest('scene-writer', effectiveBookTravelSceneWriterPrompt, writerConfig, materials, writerState);
     const writerOutputStr = await runBookTravelStreamTask(
       'start_write_book_travel_change_scene_stream',
       writerRequest,
@@ -962,7 +971,7 @@ const useStoryView = () => {
       };
       const writerConfig = settings.agentConfigs?.bookTravelSceneWriter || {};
       const writerState = { stableMemory, volatileMemory, assembledWorldModel, currentState: bookTravelStore.currentState, summaryMemory: bookTravelStore.summaryMemory || '', recentScenes: scenes.slice(-3), recentTurns: turns.slice(-5), writerInstructions: userInput };
-      const writerRequest = buildBookTravelRequest('scene-writer', settings.bookTravelSceneWriterPrompt, writerConfig, materials, writerState);
+      const writerRequest = buildBookTravelRequest('scene-writer', effectiveBookTravelSceneWriterPrompt, writerConfig, materials, writerState);
       const currentScene = scenes.find((s) => s.id === bookTravelStore.currentSceneId);
       const allowedSpeakers = currentScene?.activeCharacters || [];
       const sceneJsonStr = await runBookTravelStreamTask('start_write_book_travel_insert_beat_stream', writerRequest, { userInput, allowedSpeakers });
@@ -1212,6 +1221,10 @@ const useStoryView = () => {
       message.warning('素材缺失，请重新装配素材');
       return;
     }
+    bookTravelStore.setInitialStylePresetSnapshot(
+      [...bookTravelStore.selectedStylePresetIds],
+      effectiveBookTravelSceneWriterPrompt,
+    );
 
     setIsTransitioningScene(true);
     setStartProgressOpen(true);
@@ -1276,7 +1289,7 @@ const useStoryView = () => {
       const writerConfig = settings.agentConfigs?.bookTravelSceneWriter || {};
       const writerInstructions = readPlanText(plan, 'writerInstructions', 'writer_instructions') || plannerInput;
       const writerState = { stableMemory, volatileMemory, assembledWorldModel, currentState: newCurrentState, summaryMemory: '', recentScenes: [], recentTurns: [], plannedScene, writerInstructions };
-      const writerRequest = buildBookTravelRequest('scene-writer', settings.bookTravelSceneWriterPrompt, writerConfig, materials, writerState);
+      const writerRequest = buildBookTravelRequest('scene-writer', effectiveBookTravelSceneWriterPrompt, writerConfig, materials, writerState);
       const sceneJsonStr = await runBookTravelStreamTask('start_write_book_travel_change_scene_stream', writerRequest, { userInput: writerInstructions, allowedSpeakers: plannedScene.activeCharacters || [] });
 
       const writerOutput = cleanAndParseJSON(sceneJsonStr);
@@ -2048,6 +2061,13 @@ const useStoryView = () => {
                   />
                 </div>
               )}
+
+              {/* Start Button */}
+              <StylePresetSelector
+                target="bookTravel"
+                value={bookTravelStore.selectedStylePresetIds[0] || null}
+                onChange={(id) => bookTravelStore.setSelectedStylePresetIds(id ? [id] : [])}
+              />
 
               {/* Start Button */}
               <Button

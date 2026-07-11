@@ -140,6 +140,9 @@ export interface BookTravelSnapshot {
   ending: BookTravelEnding | null;
   input: string;
   inputMode: 'speech' | 'behavior' | 'plot';
+  selectedStylePresetIds: string[];
+  initialStylePresetIds: string[];
+  initialSystemPromptSnapshot: string | null;
 }
 
 interface BookTravelState extends BookTravelSnapshot {
@@ -150,6 +153,8 @@ interface BookTravelState extends BookTravelSnapshot {
   activeSavedProgressId: string | null;
   setInput: (input: string) => void;
   setInputMode: (mode: 'speech' | 'behavior' | 'plot') => void;
+  setSelectedStylePresetIds: (ids: string[]) => void;
+  setInitialStylePresetSnapshot: (ids: string[], prompt: string) => void;
   selectOutline: (outline: BookTravelMaterial | null) => void;
   selectWorldBook: (worldBook: BookTravelMaterial | null) => void;
   setSelectedCharacterCards: (characterCards: BookTravelMaterial[]) => void;
@@ -224,6 +229,9 @@ const initialState = {
   ending: null,
   input: '',
   inputMode: 'speech' as 'speech' | 'behavior' | 'plot',
+  selectedStylePresetIds: [],
+  initialStylePresetIds: [],
+  initialSystemPromptSnapshot: null,
   streamRuntime: initialStreamRuntime,
 };
 
@@ -257,6 +265,8 @@ export const useBookTravelStore = create<BookTravelState>()(
 
       setInput: (input) => set({ input }),
       setInputMode: (inputMode) => set({ inputMode }),
+      setSelectedStylePresetIds: (selectedStylePresetIds) => set({ selectedStylePresetIds: selectedStylePresetIds.slice(-1) }),
+      setInitialStylePresetSnapshot: (initialStylePresetIds, initialSystemPromptSnapshot) => set({ initialStylePresetIds, initialSystemPromptSnapshot }),
       selectOutline: (selectedOutline) => set({ selectedOutline }),
       selectWorldBook: (selectedWorldBook) => set({ selectedWorldBook }),
       setSelectedCharacterCards: (selectedCharacterCards) => set({ selectedCharacterCards }),
@@ -403,12 +413,19 @@ export const useBookTravelStore = create<BookTravelState>()(
         set({
           ...initialState,
           ...progress.snapshot,
+          selectedStylePresetIds: Array.isArray(progress.snapshot.selectedStylePresetIds) ? progress.snapshot.selectedStylePresetIds.slice(-1) : [],
           selectedMaterialId: progress.materialId ?? null,
           activeSavedProgressId: id,
           streamRuntime: initialStreamRuntime,
         });
       },
-      restoreSession: (snapshot) => set({ ...initialState, ...snapshot, activeSavedProgressId: null, streamRuntime: initialStreamRuntime }),
+      restoreSession: (snapshot) => set({
+        ...initialState,
+        ...snapshot,
+        selectedStylePresetIds: Array.isArray(snapshot.selectedStylePresetIds) ? snapshot.selectedStylePresetIds.slice(-1) : [],
+        activeSavedProgressId: null,
+        streamRuntime: initialStreamRuntime,
+      }),
       resetSession: () => set({ ...initialState, selectedMaterialId: null, activeSavedProgressId: null, streamRuntime: initialStreamRuntime }),
       setBookTravelStreamPhase: (phase) => set((state) => {
         const isRunning = phase === 'planner' || phase === 'writer';
@@ -482,5 +499,8 @@ const getBookTravelSnapshot = (): BookTravelSnapshot => {
     ending: state.ending,
     input: state.input,
     inputMode: state.inputMode,
+    selectedStylePresetIds: state.selectedStylePresetIds,
+    initialStylePresetIds: state.initialStylePresetIds,
+    initialSystemPromptSnapshot: state.initialSystemPromptSnapshot,
   };
 };

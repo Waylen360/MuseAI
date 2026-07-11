@@ -5,6 +5,7 @@ import { usePartnerChatStore } from '../stores/usePartnerChatStore';
 import { usePartnerStore } from '../stores/usePartnerStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { useStoryStore } from '../stores/useStoryStore';
+import { useStylePresetStore } from '../stores/useStylePresetStore';
 
 const invokeMock = vi.fn(async (command: string, _args?: unknown): Promise<any> => {
   if (command === 'start_chat_completion_stream') return 'run-1';
@@ -40,6 +41,9 @@ const characterCard = {
 };
 
 function resetStores(dynamicRoleLoadingEnabled = false) {
+  useStylePresetStore.setState({ presets: [
+    { id: 'adventure-1', name: '电影感', segments: [{ id: 'adventure-segment-1', title: '镜头', content: '冒险预设正文', enabled: true }], createdAt: 1, updatedAt: 1 },
+  ] });
   usePartnerStore.setState({
     worldBooks: [worldBook],
     characterCards: [characterCard],
@@ -62,6 +66,9 @@ function resetStores(dynamicRoleLoadingEnabled = false) {
     initialPlot: '我在森林醒来。',
     contextCompaction: null,
     dynamicRoleLoadingEnabled,
+    selectedStylePresetIds: ['adventure-1'],
+    initialStylePresetIds: [],
+    initialSystemPromptSnapshot: null,
   });
   usePartnerChatStore.setState({
     userInfo: {
@@ -104,6 +111,16 @@ describe('Story dynamic role loading page', () => {
     resetStores(false);
   });
 
+  it('冒险开始后隐藏文风预设修改入口', () => {
+    useStoryStore.setState({
+      messages: [{ id: 'started-message', role: 'user', content: '出发', tools: [] }],
+    });
+
+    render(<Adventure />);
+
+    expect(screen.queryByLabelText('冒险文风预设')).not.toBeInTheDocument();
+  });
+
   it('renders the dynamic loading switch and starts static adventures without tools', async () => {
     render(<Adventure />);
 
@@ -119,7 +136,7 @@ describe('Story dynamic role loading page', () => {
         expect.objectContaining({
           request: expect.objectContaining({
             allowedTools: [],
-            systemPrompt: expect.stringContaining('静态冒险提示词'),
+            systemPrompt: expect.stringMatching(/冒险预设正文[\s\S]*静态冒险提示词/),
             temperature: 0.3,
             maxOutputTokens: 1111,
             maxContextTokens: 2222,
@@ -132,6 +149,7 @@ describe('Story dynamic role loading page', () => {
         }),
       );
     });
+    expect(useStoryStore.getState().initialSystemPromptSnapshot).toContain('冒险预设正文');
   });
 
   it('starts dynamic adventures with role_play and keeps character/user info in Story prompt', async () => {

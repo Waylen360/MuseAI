@@ -19,6 +19,9 @@ interface PartnerChatState {
   activeRun: { runId: string | null; messageId: string | null };
   isSessionArchived: boolean;
   contextCompaction: SessionContextCompaction | null;
+  selectedStylePresetIds: string[];
+  initialStylePresetIds: string[];
+  initialSystemPromptSnapshot: string | null;
 
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   setInput: (input: string) => void;
@@ -33,6 +36,8 @@ interface PartnerChatState {
   setActiveRun: (run: { runId: string | null; messageId: string | null }) => void;
   setIsSessionArchived: (val: boolean) => void;
   setContextCompaction: (contextCompaction: SessionContextCompaction | null) => void;
+  setSelectedStylePresetIds: (ids: string[]) => void;
+  setInitialStylePresetSnapshot: (ids: string[], prompt: string) => void;
   createNewSession: () => void;
 }
 
@@ -52,6 +57,9 @@ export const usePartnerChatStore = create<PartnerChatState>()(
       activeRun: { runId: null, messageId: null },
       isSessionArchived: false,
       contextCompaction: null,
+      selectedStylePresetIds: [],
+      initialStylePresetIds: [],
+      initialSystemPromptSnapshot: null,
 
       setMessages: (updater) => set((state) => ({
         messages: typeof updater === 'function' ? updater(state.messages) : updater,
@@ -72,6 +80,8 @@ export const usePartnerChatStore = create<PartnerChatState>()(
       setActiveRun: (activeRun) => set({ activeRun }),
       setIsSessionArchived: (isSessionArchived) => set({ isSessionArchived }),
       setContextCompaction: (contextCompaction) => set({ contextCompaction }),
+      setSelectedStylePresetIds: (selectedStylePresetIds) => set({ selectedStylePresetIds: selectedStylePresetIds.slice(-1) }),
+      setInitialStylePresetSnapshot: (initialStylePresetIds, initialSystemPromptSnapshot) => set({ initialStylePresetIds, initialSystemPromptSnapshot }),
 
       createNewSession: () => {
         set(() => ({
@@ -84,6 +94,9 @@ export const usePartnerChatStore = create<PartnerChatState>()(
           sessionTitle: '新聊天',
           isSessionArchived: false,
           contextCompaction: null,
+          selectedStylePresetIds: [],
+          initialStylePresetIds: [],
+          initialSystemPromptSnapshot: null,
         }));
       },
     }),
@@ -97,12 +110,18 @@ export const usePartnerChatStore = create<PartnerChatState>()(
           selectedWorldBookId: state?.selectedWorldBookId ?? currentState.selectedWorldBookId,
           selectedCharacterCardId: state?.selectedCharacterCardId ?? currentState.selectedCharacterCardId,
           userInfo: state?.userInfo ?? currentState.userInfo,
+          selectedStylePresetIds: Array.isArray(state?.selectedStylePresetIds) ? state.selectedStylePresetIds.slice(-1) : [],
+          initialStylePresetIds: Array.isArray(state?.initialStylePresetIds) ? state.initialStylePresetIds : [],
+          initialSystemPromptSnapshot: typeof state?.initialSystemPromptSnapshot === 'string' ? state.initialSystemPromptSnapshot : null,
         };
       },
       partialize: (state) => ({
         selectedWorldBookId: state.selectedWorldBookId,
         selectedCharacterCardId: state.selectedCharacterCardId,
         userInfo: state.userInfo,
+        selectedStylePresetIds: state.selectedStylePresetIds,
+        initialStylePresetIds: state.initialStylePresetIds,
+        initialSystemPromptSnapshot: state.initialSystemPromptSnapshot,
       }),
     }
   )

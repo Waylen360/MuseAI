@@ -35,6 +35,9 @@ import { createSessionId, ensureSessionId } from '../utils/sessionIds';
 import { getEffectiveMessagesForContextStats } from '../utils/contextCompaction';
 import { resolveSessionTitle } from '../utils/sessionTitle';
 import { buildSessionHistoryDetails } from '../utils/sessionHistory';
+import { StylePresetSelector } from '../components/StylePresetSelector';
+import { useStylePresetStore } from '../stores/useStylePresetStore';
+import { prependStylePresets } from '../utils/stylePresets';
 
 interface ChatStreamEvent {
   runId: string;
@@ -213,11 +216,14 @@ const useChatView = () => {
     activeRun, setActiveRun,
     createNewSession,
     isSessionArchived, setIsSessionArchived,
-    contextCompaction, setContextCompaction
+    contextCompaction, setContextCompaction,
+    selectedStylePresetIds, setSelectedStylePresetIds,
+    initialStylePresetIds, initialSystemPromptSnapshot, setInitialStylePresetSnapshot
   } = usePartnerChatStore();
 
   const { worldBooks, characterCards, updateItemFields } = usePartnerStore();
   const settings = useSettingsStore();
+  const stylePresets = useStylePresetStore((state) => state.presets);
 
   const chatHistoryRef = useRef<HTMLDivElement>(null);
   const currentThinkingIdRef = useRef<string | null>(null);
@@ -231,6 +237,9 @@ const useChatView = () => {
   const selectedWorldBookIdRef = useRef(selectedWorldBookId);
   const selectedCharacterCardIdRef = useRef(selectedCharacterCardId);
   const contextCompactionRef = useRef<SessionContextCompaction | null>(contextCompaction);
+  const selectedStylePresetIdsRef = useRef(selectedStylePresetIds);
+  const initialStylePresetIdsRef = useRef(initialStylePresetIds);
+  const initialSystemPromptSnapshotRef = useRef(initialSystemPromptSnapshot);
 
   const [uiState, , setUiField] = useStateGroup<ChatUiState>({
     isSettingsOpen: false,
@@ -326,7 +335,10 @@ const useChatView = () => {
           contextCompaction: contextCompactionRef.current,
           isArchived: isSessionArchivedRef.current,
           characterCardId: selectedCharacterCardIdRef.current,
-          selectedWorldBookId: selectedWorldBookIdRef.current
+          selectedWorldBookId: selectedWorldBookIdRef.current,
+          selectedStylePresetIds: selectedStylePresetIdsRef.current,
+          initialStylePresetIds: initialStylePresetIdsRef.current,
+          initialSystemPromptSnapshot: initialSystemPromptSnapshotRef.current,
         }
       });
       await refreshSessions();
@@ -346,6 +358,9 @@ const useChatView = () => {
   useEffect(() => { selectedWorldBookIdRef.current = selectedWorldBookId; }, [selectedWorldBookId]);
   useEffect(() => { selectedCharacterCardIdRef.current = selectedCharacterCardId; }, [selectedCharacterCardId]);
   useEffect(() => { contextCompactionRef.current = contextCompaction; }, [contextCompaction]);
+  useEffect(() => { selectedStylePresetIdsRef.current = selectedStylePresetIds; }, [selectedStylePresetIds]);
+  useEffect(() => { initialStylePresetIdsRef.current = initialStylePresetIds; }, [initialStylePresetIds]);
+  useEffect(() => { initialSystemPromptSnapshotRef.current = initialSystemPromptSnapshot; }, [initialSystemPromptSnapshot]);
 
   useEffect(() => {
     void refreshSessions();
@@ -474,7 +489,11 @@ const useChatView = () => {
   const selectedCharacterCard = characterCards.find(cc => cc.id === selectedCharacterCardId) || null;
 
   // Compile final Prompt
-  const baseSystemPrompt = settings.partnerChatPrompt || '';
+  const baseSystemPrompt = prependStylePresets(
+    settings.partnerChatPrompt || '',
+    stylePresets,
+    selectedStylePresetIds,
+  );
   const effectiveSystemPrompt = compileEffectiveSystemPrompt(
     baseSystemPrompt,
     selectedWorldBook ? selectedWorldBook.content : null,
@@ -485,6 +504,12 @@ const useChatView = () => {
   const handleSend = async () => {
     const trimmed = input.trim();
     if (!trimmed || isStreaming) return;
+    if (!initialSystemPromptSnapshotRef.current) {
+      const initialIds = [...selectedStylePresetIdsRef.current];
+      setInitialStylePresetSnapshot(initialIds, effectiveSystemPrompt);
+      initialStylePresetIdsRef.current = initialIds;
+      initialSystemPromptSnapshotRef.current = effectiveSystemPrompt;
+    }
 
     const userMessage: Message = {
       id: `msg-${Date.now()}`,
@@ -808,6 +833,8 @@ const useChatView = () => {
       setMessages(session.messages);
       setSelectedWorldBookId(session.selectedWorldBookId ?? null);
       setSelectedCharacterCardId(session.characterCardId ?? null);
+      setSelectedStylePresetIds(session.selectedStylePresetIds ?? []);
+      setInitialStylePresetSnapshot(session.initialStylePresetIds ?? [], session.initialSystemPromptSnapshot ?? '');
       contextCompactionRef.current = session.contextCompaction ?? null;
       setContextCompaction(session.contextCompaction ?? null);
       setIsStreaming(false);
@@ -1226,8 +1253,8 @@ const useChatView = () => {
                 icon={<InfoCircleOutlined />}
                 variant="thinking"
                 title="系统提示词（已融合设定）"
-                preview={effectiveSystemPrompt.slice(0, 80) + (effectiveSystemPrompt.length > 80 ? '...' : '')}
-                detail={effectiveSystemPrompt}
+                preview={(hasMessages && initialSystemPromptSnapshot ? initialSystemPromptSnapshot : effectiveSystemPrompt).slice(0, 80) + ((hasMessages && initialSystemPromptSnapshot ? initialSystemPromptSnapshot : effectiveSystemPrompt).length > 80 ? '...' : '')}
+                detail={hasMessages && initialSystemPromptSnapshot ? initialSystemPromptSnapshot : effectiveSystemPrompt}
                 expanded={Boolean(expandedBlocks['system-prompt'])}
                 onToggle={() => toggleBlock('system-prompt')}
               />
@@ -1410,6 +1437,9 @@ const useChatView = () => {
               角色卡: {selectedCharacterCard ? selectedCharacterCard.name : '未绑定'}
             </Tag>
           </div>
+          <div style={{ width: '100%', maxWidth: 640, marginBottom: 20 }}>
+            <StylePresetSelector target="chat" value={selectedStylePresetIds[0] || null} onChange={(id) => setSelectedStylePresetIds(id ? [id] : [])} />
+          </div>
         </div>
       )}
 
@@ -1450,20 +1480,28 @@ const useChatView = () => {
             value={input}
           />
 
-          <div className="agent-composer__actions" style={CHAT_COMPOSER_ACTIONS_STYLE}>
-            <Button
-              aria-label="伴侣设置"
-              icon={<SettingOutlined />}
-              onClick={() => setIsSettingsOpen(true)}
-              shape="circle"
-              type={selectedCharacterCard ? 'primary' : 'default'}
-              style={{
-                backgroundColor: selectedCharacterCard ? '#d97757' : undefined,
-                borderColor: selectedCharacterCard ? '#d97757' : '#eae6df',
-                color: selectedCharacterCard ? '#ffffff' : '#5c5751'
-              }}
-              title="伴侣设置"
-            />
+          <div
+            className="agent-composer__actions"
+            style={{
+              ...CHAT_COMPOSER_ACTIONS_STYLE,
+              justifyContent: hasMessages ? 'flex-end' : 'space-between',
+            }}
+          >
+            {!hasMessages && (
+              <Button
+                aria-label="伴侣设置"
+                icon={<SettingOutlined />}
+                onClick={() => setIsSettingsOpen(true)}
+                shape="circle"
+                type={selectedCharacterCard ? 'primary' : 'default'}
+                style={{
+                  backgroundColor: selectedCharacterCard ? '#d97757' : undefined,
+                  borderColor: selectedCharacterCard ? '#d97757' : '#eae6df',
+                  color: selectedCharacterCard ? '#ffffff' : '#5c5751'
+                }}
+                title="伴侣设置"
+              />
+            )}
 
             <div className="agent-send-cluster" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <Tooltip color="#fff" placement="topRight" title={contextTooltip} overlayInnerStyle={{ width: 'max-content', maxWidth: 320, padding: '8px 12px', border: '1px solid #eae6df' }}>

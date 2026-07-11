@@ -723,6 +723,50 @@ pub fn build_endpoint(base_url: &str, default_path: &str, terminal_path: &str) -
     format!("{}/{}", trimmed_base, default_path)
 }
 
+#[derive(Default)]
+pub struct Utf8StreamDecoder {
+    pending: Vec<u8>,
+}
+
+impl Utf8StreamDecoder {
+    pub fn push_to(&mut self, chunk: &[u8], output: &mut String) {
+        self.pending.extend_from_slice(chunk);
+        let mut consumed = 0;
+
+        while consumed < self.pending.len() {
+            match std::str::from_utf8(&self.pending[consumed..]) {
+                Ok(text) => {
+                    output.push_str(text);
+                    consumed = self.pending.len();
+                }
+                Err(error) => {
+                    let valid_end = consumed + error.valid_up_to();
+                    if valid_end > consumed {
+                        output.push_str(
+                            std::str::from_utf8(&self.pending[consumed..valid_end])
+                                .expect("UTF-8 validator reported a valid prefix"),
+                        );
+                    }
+                    match error.error_len() {
+                        Some(invalid_len) => {
+                            output.push('\u{FFFD}');
+                            consumed = valid_end + invalid_len;
+                        }
+                        None => {
+                            consumed = valid_end;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if consumed > 0 {
+            self.pending.drain(..consumed);
+        }
+    }
+}
+
 pub fn process_sse_buffer(buffer: &mut String, mut handle_data: impl FnMut(&str)) {
     while let Some(index) = buffer.find("\n\n") {
         let frame = buffer[..index].to_string();
@@ -1400,6 +1444,29 @@ mod tests {
         process_sse_buffer(&mut buffer, |data| received.push(data.to_string()));
         assert_eq!(received, vec!["hello"]);
         assert_eq!(buffer, "partial");
+    }
+
+    #[test]
+    fn utf8_stream_decoder_preserves_chinese_split_across_chunks() {
+        let source = "眼睛带着些许好奇".as_bytes();
+        let split = "眼".len() + 1;
+        let mut decoder = Utf8StreamDecoder::default();
+        let mut output = String::new();
+
+        decoder.push_to(&source[..split], &mut output);
+        assert_eq!(output, "眼");
+        decoder.push_to(&source[split..], &mut output);
+
+        assert_eq!(output, "眼睛带着些许好奇");
+        assert!(!output.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn utf8_stream_decoder_replaces_truly_invalid_bytes() {
+        let mut decoder = Utf8StreamDecoder::default();
+        let mut output = String::new();
+        decoder.push_to(&[b'a', 0xff, b'b'], &mut output);
+        assert_eq!(output, "a\u{FFFD}b");
     }
 
     #[test]

@@ -164,6 +164,9 @@ pub struct AgentSessionRecord {
     pub character_card_ids: Option<Vec<String>>,
     pub selected_world_book_id: Option<String>,
     pub dynamic_role_loading_enabled: Option<bool>,
+    pub selected_style_preset_ids: Option<Vec<String>>,
+    pub initial_style_preset_ids: Option<Vec<String>>,
+    pub initial_system_prompt_snapshot: Option<String>,
     pub book_travel_state: Option<Value>,
 }
 #[derive(Clone, Serialize)]

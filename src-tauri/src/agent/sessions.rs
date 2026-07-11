@@ -1948,9 +1948,10 @@ async fn run_background_items_stream_task(
 
             let mut stream = response.bytes_stream();
             let mut buffer = String::new();
+            let mut utf8_decoder = Utf8StreamDecoder::default();
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|e| format_network_error(&e))?;
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                utf8_decoder.push_to(&chunk, &mut buffer);
                 process_sse_buffer(&mut buffer, |data| {
                     if let Some(event) = parse_anthropic_stream_event(data) {
                         match event {
@@ -2006,9 +2007,10 @@ async fn run_background_items_stream_task(
 
             let mut stream = response.bytes_stream();
             let mut buffer = String::new();
+            let mut utf8_decoder = Utf8StreamDecoder::default();
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|e| format_network_error(&e))?;
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                utf8_decoder.push_to(&chunk, &mut buffer);
                 process_sse_buffer(&mut buffer, |data| {
                     if data == "[DONE]" {
                         return;
@@ -2239,12 +2241,13 @@ pub async fn test_llm_connection(request: TestConnectionRequest) -> Result<Strin
 
             let mut stream = response.bytes_stream();
             let mut buffer = String::new();
+            let mut utf8_decoder = Utf8StreamDecoder::default();
             let mut received_valid_event = false;
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|error| {
                     format_response_read_error("读取 OpenAI 兼容流式响应失败", &error)
                 })?;
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                utf8_decoder.push_to(&chunk, &mut buffer);
                 process_sse_buffer(&mut buffer, |data| {
                     if data == "[DONE]" || parse_openai_stream_event(data).is_some() {
                         received_valid_event = true;
@@ -2759,11 +2762,12 @@ async fn call_reverse_outline_llm_stream(
             }
 
             let mut stream = response.bytes_stream();
-            let mut buffer = String::new();
+        let mut buffer = String::new();
+        let mut utf8_decoder = Utf8StreamDecoder::default();
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
                     Ok(chunk) => {
-                        buffer.push_str(&String::from_utf8_lossy(&chunk));
+                        utf8_decoder.push_to(&chunk, &mut buffer);
                         process_sse_buffer(&mut buffer, |data| {
                             if let Some(crate::models::AnthropicStreamEvent::Text(delta)) =
                                 parse_anthropic_stream_event(data)
@@ -2822,11 +2826,12 @@ async fn call_reverse_outline_llm_stream(
             }
 
             let mut stream = response.bytes_stream();
-            let mut buffer = String::new();
+        let mut buffer = String::new();
+        let mut utf8_decoder = Utf8StreamDecoder::default();
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
                     Ok(chunk) => {
-                        buffer.push_str(&String::from_utf8_lossy(&chunk));
+                        utf8_decoder.push_to(&chunk, &mut buffer);
                         process_sse_buffer(&mut buffer, |data| {
                             if data == "[DONE]" {
                                 return;
@@ -3636,6 +3641,9 @@ mod tests {
             character_card_ids: None,
             selected_world_book_id: None,
             dynamic_role_loading_enabled: None,
+            selected_style_preset_ids: None,
+            initial_style_preset_ids: None,
+            initial_system_prompt_snapshot: None,
             book_travel_state: None,
         }
     }
@@ -3682,6 +3690,9 @@ mod tests {
         let mut record = session_record("story-session-shared", Some("story"), false);
         record.selected_world_book_id = Some("world-1".to_string());
         record.character_card_ids = Some(vec!["card-1".to_string()]);
+        record.selected_style_preset_ids = Some(vec!["preset-2".to_string(), "preset-1".to_string()]);
+        record.initial_style_preset_ids = Some(vec!["preset-1".to_string()]);
+        record.initial_system_prompt_snapshot = Some("初始化系统提示词".to_string());
 
         let summary = save_agent_session_in_dir(&dir, record).expect("save session");
         let saved =
@@ -3696,6 +3707,9 @@ mod tests {
             saved_record.character_card_ids,
             Some(vec!["card-1".to_string()])
         );
+        assert_eq!(saved_record.selected_style_preset_ids, Some(vec!["preset-2".to_string(), "preset-1".to_string()]));
+        assert_eq!(saved_record.initial_style_preset_ids, Some(vec!["preset-1".to_string()]));
+        assert_eq!(saved_record.initial_system_prompt_snapshot.as_deref(), Some("初始化系统提示词"));
         let _ = fs::remove_dir_all(root);
     }
 
