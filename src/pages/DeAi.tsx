@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import WorkspaceDirectory from '../components/WorkspaceDirectory';
+import { filterSelectedItems } from '../utils/collectionSelection';
 import MarkdownEditor from '../components/MarkdownEditor';
 import DeAiAgentChat from '../components/DeAiAgentChat';
 import { useDeAiStore } from '../stores/useDeAiStore';
@@ -228,8 +229,9 @@ const useDeAiView = () => {
 
   useEffect(() => {
     if (!referenceFilesLoaded) return;
+    const allReferenceFileSet = new Set(allReferenceFiles);
     setSelectedDetectorReferences((selected) =>
-      selected.filter((file) => allReferenceFiles.includes(file))
+      selected.filter((file) => allReferenceFileSet.has(file))
     );
   }, [allReferenceFiles, referenceFilesLoaded, setSelectedDetectorReferences]);
 
@@ -327,8 +329,11 @@ const useDeAiView = () => {
     const latestVersions = await refreshVersions(activeVersionId);
     
     // Filter out history suggestions based on detectorSelectedHistoricalVersions (exclude activeVersionId if it exists)
-    const historySuggestions = latestVersions
-      .filter(v => v.id !== activeVersionId && v.suggestion?.trim() && detectorSelectedHistoricalVersions.includes(v.id))
+    const historySuggestions = filterSelectedItems(
+      latestVersions,
+      detectorSelectedHistoricalVersions,
+      (version) => version.id !== activeVersionId && version.suggestion?.trim(),
+    )
       .sort((a, b) => b.timestamp - a.timestamp);
 
     if (activeVersionId) {
@@ -356,8 +361,15 @@ const useDeAiView = () => {
     const latestVersions = await refreshVersions(activeVersionId);
     
     // Filter out history suggestions based on removerSelectedHistoricalVersions
-    const historySuggestions = latestVersions
-      .filter(v => v.id !== activeVersionId && v.suggestion?.trim() && extractSuggestionText(v.suggestion!) !== confirmedSuggestion && removerSelectedHistoricalVersions.includes(v.id))
+    const historySuggestions = filterSelectedItems(
+      latestVersions,
+      removerSelectedHistoricalVersions,
+      (version) => (
+        version.id !== activeVersionId
+        && version.suggestion?.trim()
+        && extractSuggestionText(version.suggestion) !== confirmedSuggestion
+      ),
+    )
       .sort((a, b) => b.timestamp - a.timestamp);
       
     const confirmed = await new Promise<boolean>((resolve) => {

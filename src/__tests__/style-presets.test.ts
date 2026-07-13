@@ -39,6 +39,26 @@ describe('文风预设', () => {
     expect(resolveStylePresets(presets, ['missing', 'a']).missingIds).toEqual(['missing']);
   });
 
+  it('保留重复选择、对象引用、片段顺序和字符统计', () => {
+    const presets = normalizeStylePresets([
+      { id: 'a', name: '预设甲', segments: [
+        { id: 'a1', title: '甲一', content: '甲', enabled: true },
+        { id: 'a2', title: '空白', content: '   ', enabled: true },
+        { id: 'a3', title: '关闭', content: '不应计入', enabled: false },
+        { id: 'a4', title: '甲二', content: '乙乙', enabled: true },
+      ], createdAt: 1, updatedAt: 1 },
+    ]);
+
+    const result = resolveStylePresets(presets, ['missing', 'a', 'a']);
+
+    expect(result.missingIds).toEqual(['missing']);
+    expect(result.presets).toEqual([presets[0], presets[0]]);
+    expect(result.segments.map(({ segment }) => segment.id)).toEqual(['a1', 'a4', 'a1', 'a4']);
+    expect(result.segments[0].preset).toBe(presets[0]);
+    expect(result.segments[0].segment).toBe(presets[0].segments[0]);
+    expect(result.totalCharacters).toBe(6);
+  });
+
   it('支持片段启停、更新和重排', () => {
     const presetId = useStylePresetStore.getState().addPreset();
     const firstId = useStylePresetStore.getState().presets[0].segments[0].id;

@@ -18,9 +18,9 @@ export const resolveStylePresets = (presets: StylePreset[], selectedIds: string[
     }
     return [preset];
   });
-  const segments = resolved.flatMap((preset) => preset.segments
-    .filter((segment) => segment.enabled && segment.content.trim())
-    .map((segment) => ({ preset, segment })));
+  const segments = resolved.flatMap((preset) => preset.segments.flatMap((segment) => (
+    segment.enabled && segment.content.trim() ? [{ preset, segment }] : []
+  )));
   return {
     presets: resolved,
     segments,

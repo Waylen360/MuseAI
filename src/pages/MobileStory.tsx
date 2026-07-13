@@ -30,6 +30,7 @@ import {
   getRolePlayCharacterName,
 } from './storyAgent';
 import type { AgentSessionRecord, AgentToolEntry, Message } from '../stores/useAgentStore';
+import { filterItemsById } from '../utils/collectionSelection';
 
 interface MobileStoryUiState {
   isArchiveModalOpen: boolean;
@@ -167,7 +168,9 @@ const useMobileStoryView = () => {
   const activeRunRef = useRef(activeRun);
   const contextCompactionRef = useRef(contextCompaction);
   const currentThinkingIdRef = useRef<string | null>(null);
-  const selectedCards = characterCards.filter(cc => selectedCharacterCardIds.includes(cc.id));
+  const selectedCharacterCardIdSet = new Set(selectedCharacterCardIds);
+  const selectedCards = filterItemsById(characterCards, selectedCharacterCardIds);
+  const tempSelectedCardIdSet = new Set(tempSelectedCardIds);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -376,7 +379,7 @@ const useMobileStoryView = () => {
     userMsg: Message
   ) => {
     const selectedWorldBook = worldBooks.find(wb => wb.id === selectedWorldBookId);
-    const selectedCards = characterCards.filter(cc => selectedCharacterCardIds.includes(cc.id));
+    const selectedCards = filterItemsById(characterCards, selectedCharacterCardIds);
 
     // Construct settings from partner-store locally if empty
     const partnerChatUserInfo = {};
@@ -628,7 +631,7 @@ const useMobileStoryView = () => {
         return;
       }
 
-      const filteredCards = selectedCards.filter(card => tempSelectedCardIds.includes(card.id));
+      const filteredCards = filterItemsById(selectedCards, tempSelectedCardIds);
       const results = await Promise.all(filteredCards.map(async (card) => {
         const result = await appInvoke('analyze_character_memory', {
           sessionId,
@@ -672,7 +675,7 @@ const useMobileStoryView = () => {
 
   const handleConfirmArchive = async () => {
     try {
-      const filteredCards = selectedCards.filter(card => tempSelectedCardIds.includes(card.id));
+      const filteredCards = filterItemsById(selectedCards, tempSelectedCardIds);
       await appInvoke('archive_agent_session', {
         sessionId,
         payload: {
@@ -918,7 +921,7 @@ const useMobileStoryView = () => {
               <BookOutlined style={{ color: '#d97757' }} />
               <span>
                 参与角色：{characterCards.reduce<string[]>((names, c) => {
-                  if (selectedCharacterCardIds.includes(c.id)) {
+                  if (selectedCharacterCardIdSet.has(c.id)) {
                     names.push(c.name);
                   }
                   return names;
@@ -1198,7 +1201,7 @@ const useMobileStoryView = () => {
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
               {selectedCards.map((card) => {
-                const isChecked = tempSelectedCardIds.includes(card.id);
+                const isChecked = tempSelectedCardIdSet.has(card.id);
                 return (
                   <Checkbox
                     key={card.id}
@@ -1238,7 +1241,7 @@ const useMobileStoryView = () => {
                 onChange={setSelectedTargetCardId}
                 style={{ width: '100%' }}
                 options={selectedCards.reduce<{ value: string; label: string }[]>((options, card) => {
-                  if (tempSelectedCardIds.includes(card.id)) {
+                  if (tempSelectedCardIdSet.has(card.id)) {
                     options.push({ value: card.id, label: card.name });
                   }
                   return options;

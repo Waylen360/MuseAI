@@ -126,7 +126,7 @@ describe('mobile archive flow', () => {
       isStreaming: false,
       expandedBlocks: {},
       selectedWorldBookId: null,
-      selectedCharacterCardIds: [characterCard.id, secondCharacterCard.id],
+      selectedCharacterCardIds: [secondCharacterCard.id, 'missing-card', characterCard.id, secondCharacterCard.id],
       sessions: [],
       sessionId: 'story-session-unsaved',
       sessionTitle: '新故事',
@@ -157,7 +157,7 @@ describe('mobile archive flow', () => {
             todos: [],
             isArchived: false,
             sessionKind: 'story',
-            characterCardIds: [characterCard.id, secondCharacterCard.id],
+            characterCardIds: [secondCharacterCard.id, 'missing-card', characterCard.id, secondCharacterCard.id],
             contextCompaction: compactedContext,
           }),
         })

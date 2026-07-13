@@ -6,9 +6,11 @@ import { listen } from '@tauri-apps/api/event';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useSettingsStore } from '../stores/useSettingsStore';
-import { createStableContentKey, createStableToolKey } from '../utils/renderKeys';
+import { createAgentTodoKeyGenerator, createStableContentKey, createStableToolKey } from '../utils/renderKeys';
 import { useStateGroup } from '../utils/reducerState';
 import { getEffectiveMessagesForContextStats } from '../utils/contextCompaction';
+import { filterExistingValues } from '../utils/collectionSelection';
+import { ARTICLE_TYPE_OPTIONS, buildRequiredSkillInstruction, getWriterSkillName } from '../constants/articleTypes';
 import {
   useAgentStore,
   Message,
@@ -371,7 +373,7 @@ const useAgentChatView = ({ onClose, title = '写文章Agent' }: AgentChatProps)
 
       const tree = await fetchTree(dir);
       const allFiles = collectFiles(tree);
-      const nextSelectedFiles = selectedReferenceFilesRef.current.filter((file) => allFiles.includes(file));
+      const nextSelectedFiles = filterExistingValues(selectedReferenceFilesRef.current, allFiles);
       patchUiState({
         referenceTree: tree,
         allReferenceFiles: allFiles,
@@ -489,24 +491,10 @@ const useAgentChatView = ({ onClose, title = '写文章Agent' }: AgentChatProps)
       });
     }
 
-    const articleTypeStr = settings.articleType?.join('-') || '';
-    const mentionedSkillNames: string[] = [];
-    if (articleTypeStr === '男频-长篇-玄幻脑洞') {
-      mentionedSkillNames.push('fanqie-xuanhuan-writer');
-    } else if (articleTypeStr === '女频-短篇-追妻火葬场') {
-      mentionedSkillNames.push('fanqie-short-zhuiqi-writer');
-    } else if (articleTypeStr === '女频-短篇-大女主') {
-      mentionedSkillNames.push('fanqie-short-danvzhu-writer');
-    } else if (articleTypeStr === '女频-短篇-系统穿越') {
-      mentionedSkillNames.push('fanqie-short-xitong-writer');
-    } else if (articleTypeStr === '女频-短篇-真假千金') {
-      mentionedSkillNames.push('fanqie-short-qianjin-writer');
-    } else if (articleTypeStr === '女频-短篇-规则怪谈') {
-      mentionedSkillNames.push('fanqie-short-guize-writer');
-    } else if (articleTypeStr === '公众号') {
-      mentionedSkillNames.push('kitt-writer');
-    }
-    const mentionedSkills = skills.filter(s => mentionedSkillNames.includes(s.name));
+    const writerSkillName = getWriterSkillName(settings.articleType ?? []);
+    const mentionedSkillNames = writerSkillName ? [writerSkillName] : [];
+    const mentionedSkillNameSet = new Set(mentionedSkillNames);
+    const mentionedSkills = skills.filter(s => mentionedSkillNameSet.has(s.name));
 
     const effectiveSystemPrompt = selectedOutlineFile
       ? `${settings.systemPrompt}\n\n【大纲文件】请根据以下大纲文件进行写作：${selectedOutlineFile}`
@@ -701,6 +689,7 @@ const useAgentChatView = ({ onClose, title = '写文章Agent' }: AgentChatProps)
       </div>
     </div>
   );
+  const getTodoKey = createAgentTodoKeyGenerator('agent-chat-todo');
 
   return (
     <div className="agent-chat">
@@ -718,40 +707,7 @@ const useAgentChatView = ({ onClose, title = '写文章Agent' }: AgentChatProps)
             <Cascader
               value={settings.articleType}
               onChange={(val) => settings.setArticleType(val as string[])}
-              options={[
-                {
-                  value: '男频',
-                  label: '男频',
-                  children: [
-                    {
-                      value: '长篇',
-                      label: '长篇',
-                      children: [{ value: '玄幻脑洞', label: '玄幻脑洞' }],
-                    },
-                  ],
-                },
-                {
-                  value: '女频',
-                  label: '女频',
-                  children: [
-                    {
-                      value: '短篇',
-                      label: '短篇',
-                      children: [
-                        { value: '追妻火葬场', label: '追妻火葬场' },
-                        { value: '大女主', label: '大女主' },
-                        { value: '系统穿越', label: '系统穿越' },
-                        { value: '真假千金', label: '真假千金' },
-                        { value: '规则怪谈', label: '规则怪谈' },
-                      ],
-                    },
-                  ],
-                },
-                {
-                  value: '公众号',
-                  label: '公众号',
-                },
-              ]}
+              options={ARTICLE_TYPE_OPTIONS}
               placeholder="请选择文章类型"
               style={{ width: '100%' }}
             />
@@ -1001,8 +957,8 @@ const useAgentChatView = ({ onClose, title = '写文章Agent' }: AgentChatProps)
         )}
         {todos.length > 0 && isTodoOpen && (
           <div className="agent-todo-panel">
-            {todos.map((todo, index) => (
-              <div className="agent-todo-item" key={`${todo.content}-${index}`}>
+            {todos.map((todo) => (
+              <div className="agent-todo-item" key={getTodoKey(todo)}>
                 <span>{todo.status}</span>
                 <strong>{todo.content}</strong>
               </div>
@@ -1142,8 +1098,7 @@ function buildModelMessages(
       let content = message.content;
       if (message.id === currentUserMessageId && mentionedSkills.length > 0) {
         const skillNames = mentionedSkills.map((skill) => skill.name);
-        const slashCommands = skillNames.map((name) => `/${name}`).join('\n');
-        content = `${slashCommands}\n【系统指令】本轮必须优先调用以下技能：${skillNames.join(', ')}\n\n${content}`;
+        content = buildRequiredSkillInstruction(content, skillNames);
       }
       return [{ id: message.id, role: 'user', content }];
     }

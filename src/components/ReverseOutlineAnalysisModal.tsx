@@ -386,25 +386,29 @@ interface SourceGroupProps {
   onCheck: (tree: SourceTree, checkedKeys: SourceGroupCheckedKeys) => void;
 }
 
-const SourceGroup: React.FC<SourceGroupProps> = ({ title, tree, selectedPaths, onCheck }) => (
-  <div>
-    <div style={sectionTitleStyle}>{title}</div>
-    <div style={sourceListStyle}>
-      {tree.nodes.length === 0 ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可选文章" />
-      ) : (
-        <Tree
-          blockNode
-          checkable
-          checkedKeys={selectedPaths.filter(path => tree.nodePaths.includes(path))}
-          onCheck={checkedKeys => onCheck(tree, checkedKeys)}
-          selectable={false}
-          treeData={tree.nodes}
-        />
-      )}
+const SourceGroup: React.FC<SourceGroupProps> = ({ title, tree, selectedPaths, onCheck }) => {
+  const nodePathSet = new Set(tree.nodePaths);
+
+  return (
+    <div>
+      <div style={sectionTitleStyle}>{title}</div>
+      <div style={sourceListStyle}>
+        {tree.nodes.length === 0 ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可选文章" />
+        ) : (
+          <Tree
+            blockNode
+            checkable
+            checkedKeys={selectedPaths.filter(path => nodePathSet.has(path))}
+            onCheck={checkedKeys => onCheck(tree, checkedKeys)}
+            selectable={false}
+            treeData={tree.nodes}
+          />
+        )}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 const useReverseOutlineAnalysisModalView = ({ open, onClose }: ReverseOutlineAnalysisModalProps) => {
   const settings = useSettingsStore();

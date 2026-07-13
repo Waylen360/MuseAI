@@ -49,6 +49,7 @@ import { buildSessionHistoryDetails } from '../utils/sessionHistory';
 import { StylePresetSelector } from '../components/StylePresetSelector';
 import { useStylePresetStore } from '../stores/useStylePresetStore';
 import { prependStylePresets } from '../utils/stylePresets';
+import { filterItemsById } from '../utils/collectionSelection';
 
 interface ChatStreamEvent {
   runId: string;
@@ -416,7 +417,8 @@ const useAdventureView = () => {
   }, [messages.length]);
 
   const selectedWorldBook = worldBooks.find(wb => wb.id === selectedWorldBookId) || null;
-  const selectedCards = characterCards.filter(cc => selectedCharacterCardIds.includes(cc.id));
+  const selectedCards = filterItemsById(characterCards, selectedCharacterCardIds);
+  const tempSelectedCardIdSet = new Set(tempSelectedCardIds);
   const characterCardGroups = useMemo(
     () => groupCharacterCardsByWorldBook(worldBooks, characterCards),
     [worldBooks, characterCards],
@@ -425,10 +427,14 @@ const useAdventureView = () => {
     () => characterCardGroups.map((group) => group.key),
     [characterCardGroups],
   );
+  const characterCardGroupKeySet = useMemo(
+    () => new Set(characterCardGroupKeys),
+    [characterCardGroupKeys],
+  );
   const characterCardIdSet = new Set(characterCards.map((card) => card.id));
   useEffect(() => {
-    setUiField('expandedCharacterGroupKeys', (keys) => keys.filter((key) => characterCardGroupKeys.includes(String(key))));
-  }, [characterCardGroupKeys, setUiField]);
+    setUiField('expandedCharacterGroupKeys', (keys) => keys.filter((key) => characterCardGroupKeySet.has(String(key))));
+  }, [characterCardGroupKeySet, setUiField]);
 
   const toggleCharacterGroup = (groupKey: string) => {
     setExpandedCharacterGroupKeys((keys) =>
@@ -1115,7 +1121,7 @@ const useAdventureView = () => {
   const handleConfirmArchive = async () => {
     try {
       // 1. Update all character card fields
-      const filteredCards = selectedCards.filter(c => tempSelectedCardIds.includes(c.id));
+      const filteredCards = filterItemsById(selectedCards, tempSelectedCardIds);
       for (const card of filteredCards) {
         const relationType = editedRelationTypes[card.id] || '';
         const relationModel = editedRelationModels[card.id] || '';
@@ -1265,7 +1271,7 @@ const useAdventureView = () => {
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', padding: '8px 0' }}>
               {selectedCards.map((card) => {
-                const isChecked = tempSelectedCardIds.includes(card.id);
+                const isChecked = tempSelectedCardIdSet.has(card.id);
                 return (
                   <Checkbox
                     key={card.id}
@@ -1302,7 +1308,7 @@ const useAdventureView = () => {
                 onChange={handleTargetCardChange}
                 style={{ width: 220 }}
                 options={selectedCards.reduce<{ value: string; label: string }[]>((options, c) => {
-                  if (tempSelectedCardIds.includes(c.id)) {
+                  if (tempSelectedCardIdSet.has(c.id)) {
                     options.push({ value: c.id, label: c.name });
                   }
                   return options;

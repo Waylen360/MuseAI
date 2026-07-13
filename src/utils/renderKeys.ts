@@ -5,6 +5,11 @@ interface ToolIdentity {
   arguments?: string;
 }
 
+interface TodoIdentity {
+  content: string;
+  status: string;
+}
+
 function stableContentKey(prefix: string, content: string) {
   let hash = 0;
   for (let index = 0; index < content.length; index += 1) {
@@ -33,4 +38,10 @@ export function createStableToolKey(prefix: string) {
     }
     return getFallbackKey(`${tool.name}\n${tool.arguments ?? ''}\n${tool.result ?? ''}`);
   };
+}
+
+export function createAgentTodoKeyGenerator(prefix: string) {
+  const getFallbackKey = createStableContentKey(prefix);
+
+  return (todo: TodoIdentity) => getFallbackKey(`${todo.status}\n${todo.content}`);
 }

@@ -37,4 +37,17 @@ describe('文风预设片段编辑器', () => {
     expect(useStylePresetStore.getState().presets[0].segments.map((segment) => segment.title)).toEqual(['环境', '对白']);
     expect(screen.queryByLabelText(/拖拽/)).not.toBeInTheDocument();
   });
+
+  it('独立维护多个片段的展开状态', () => {
+    render(<StylePresetEditor preset={useStylePresetStore.getState().presets[0]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '对白' }));
+    fireEvent.click(screen.getByRole('button', { name: '环境' }));
+    expect(screen.getByLabelText('提示词正文 1')).toHaveValue('自然对白');
+    expect(screen.getByLabelText('提示词正文 2')).toHaveValue('环境描写');
+
+    fireEvent.click(screen.getByRole('button', { name: '对白' }));
+    expect(screen.queryByLabelText('提示词正文 1')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('提示词正文 2')).toHaveValue('环境描写');
+  });
 });

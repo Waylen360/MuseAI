@@ -14,9 +14,21 @@ interface StylePresetEditorProps {
   preset: StylePreset;
 }
 
+const STYLE_PRESET_TITLE_BUTTON_STYLE: React.CSSProperties = {
+  flex: 1,
+  border: 0,
+  padding: 0,
+  background: 'transparent',
+  textAlign: 'left',
+  color: '#33312e',
+  fontWeight: 500,
+  cursor: 'pointer',
+};
+
 export const StylePresetEditor: React.FC<StylePresetEditorProps> = ({ preset }) => {
   const { updatePresetName, addSegment, updateSegment, deleteSegment, reorderSegments } = useStylePresetStore();
   const [expandedSegmentIds, setExpandedSegmentIds] = useState<string[]>([]);
+  const expandedSegmentIdSet = new Set(expandedSegmentIds);
 
   const toggleExpanded = (segmentId: string) => {
     setExpandedSegmentIds((ids) => ids.includes(segmentId)
@@ -52,7 +64,7 @@ export const StylePresetEditor: React.FC<StylePresetEditorProps> = ({ preset }) 
         ) : (
           <Space orientation="vertical" size={10} style={{ width: '100%' }}>
             {preset.segments.map((segment, index) => {
-              const expanded = expandedSegmentIds.includes(segment.id);
+              const expanded = expandedSegmentIdSet.has(segment.id);
               return (
                 <div
                   key={segment.id}
@@ -76,7 +88,7 @@ export const StylePresetEditor: React.FC<StylePresetEditorProps> = ({ preset }) 
                     <button
                       type="button"
                       onClick={() => toggleExpanded(segment.id)}
-                      style={{ flex: 1, border: 0, padding: 0, background: 'transparent', textAlign: 'left', color: '#33312e', fontWeight: 500, cursor: 'pointer' }}
+                      style={STYLE_PRESET_TITLE_BUTTON_STYLE}
                     >
                       {segment.title || '未命名提示词'}
                     </button>

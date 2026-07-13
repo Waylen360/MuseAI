@@ -677,7 +677,8 @@ const Bond: React.FC = () => {
   const selectedCharacter = characterCards.find((c) => c.id === selectedId);
 
   useEffect(() => {
-    setUiField('expandedCharacterGroupKeys', (keys) => keys.filter((key) => characterCardGroupKeys.includes(String(key))));
+    const characterCardGroupKeySet = new Set(characterCardGroupKeys);
+    setUiField('expandedCharacterGroupKeys', (keys) => keys.filter((key) => characterCardGroupKeySet.has(String(key))));
   }, [characterCardGroupKeys, setUiField]);
 
   const handleSelectCharacter = (id: string) => {

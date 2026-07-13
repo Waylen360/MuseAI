@@ -138,6 +138,8 @@ describe('ReverseOutlineAnalysisModal', () => {
     await waitFor(() => expect(screen.getByLabelText('正文B')).toBeInTheDocument());
     fireEvent.click(screen.getByLabelText('正文B'));
     fireEvent.click(screen.getByLabelText('范文A'));
+    expect(screen.getByLabelText('正文B')).toBeChecked();
+    expect(screen.getByLabelText('范文A')).toBeChecked();
     fireEvent.click(screen.getByText('长篇'));
 
     await waitFor(() => expect(screen.getByText('1. 范文A')).toBeInTheDocument());

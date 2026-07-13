@@ -10,6 +10,7 @@ import { CheckCircleOutlined, RobotOutlined, SettingOutlined } from '@ant-design
 import { invoke } from '@tauri-apps/api/core';
 import { ScoreDetailsModal } from '../components/ScoreDetailsModal';
 import { useStateGroup } from '../utils/reducerState';
+import { ARTICLE_TYPE_OPTIONS } from '../constants/articleTypes';
 
 const MIN_FILE_TREE_WIDTH = 250;
 const MAX_FILE_TREE_WIDTH = 420;
@@ -34,41 +35,6 @@ interface WorksUiState {
   scoreModalFile: string | null;
   articleTree: FileNode[];
 }
-
-const ARTICLE_TYPE_OPTIONS = [
-  {
-    value: '男频',
-    label: '男频',
-    children: [
-      {
-        value: '长篇',
-        label: '长篇',
-        children: [{ value: '玄幻脑洞', label: '玄幻脑洞' }],
-      },
-    ],
-  },
-  {
-    value: '女频',
-    label: '女频',
-    children: [
-      {
-        value: '短篇',
-        label: '短篇',
-        children: [
-          { value: '追妻火葬场', label: '追妻火葬场' },
-          { value: '大女主', label: '大女主' },
-          { value: '系统穿越', label: '系统穿越' },
-          { value: '真假千金', label: '真假千金' },
-          { value: '规则怪谈', label: '规则怪谈' },
-        ],
-      },
-    ],
-  },
-  {
-    value: '公众号',
-    label: '公众号',
-  },
-];
 
 const LONG_SCORE_FIELDS = ['情节架构与长期张力', '人物塑造与代入感', '世界观与设定融合度', '节奏把控与爽点密度', '文笔与叙事连贯性'];
 const SHORT_SCORE_FIELDS = ['创意与核心脑洞', '故事完整性与结构', '人物聚焦与情感穿透', '节奏与情绪张力', '语言质感与结尾余韵'];

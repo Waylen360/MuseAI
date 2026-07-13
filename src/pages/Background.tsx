@@ -374,7 +374,8 @@ const useBackgroundView = () => {
   };
 
   const readSelectedReferenceText = async () => {
-    const selectedFileOnlyPaths = selectedFilePaths.filter(path => flatFilesRef.current.includes(path));
+    const flatFileSet = new Set(flatFilesRef.current);
+    const selectedFileOnlyPaths = selectedFilePaths.filter(path => flatFileSet.has(path));
     if (selectedFileOnlyPaths.length === 0) {
       message.warning('请至少选择一个参考文件');
       return null;
@@ -1001,6 +1002,8 @@ const useBackgroundView = () => {
   useEffect(() => {
     const previousGroupKeys = knownCharacterGroupKeysRef.current;
     knownCharacterGroupKeysRef.current = characterCardGroupKeys;
+    const characterCardGroupKeySet = new Set(characterCardGroupKeys);
+    const previousGroupKeySet = new Set(previousGroupKeys);
 
     setUiField('expandedCharacterGroupKeys', (previousKeys) => {
       if (!hasInitializedCharacterGroupsRef.current) {
@@ -1008,8 +1011,8 @@ const useBackgroundView = () => {
         return characterCardGroupKeys;
       }
 
-      const validKeys = previousKeys.filter((key) => characterCardGroupKeys.includes(String(key)));
-      const newKeys = characterCardGroupKeys.filter((key) => !previousGroupKeys.includes(key));
+      const validKeys = previousKeys.filter((key) => characterCardGroupKeySet.has(String(key)));
+      const newKeys = characterCardGroupKeys.filter((key) => !previousGroupKeySet.has(key));
       return [...validKeys, ...newKeys];
     });
   }, [characterCardGroupKeys, setUiField]);

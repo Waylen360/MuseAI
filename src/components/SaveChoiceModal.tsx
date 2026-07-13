@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useState } from 'react';
+import React, { useLayoutEffect, useReducer } from 'react';
 import { Alert, Input, Modal, Radio, Select, Space } from 'antd';
 
 export type SaveChoiceMode = 'create' | 'overwrite';
@@ -33,6 +33,56 @@ interface SaveChoiceModalProps {
   onConfirm: (payload: SaveChoiceConfirmPayload) => void;
 }
 
+interface SaveChoiceDraft {
+  mode: SaveChoiceMode;
+  name: string;
+  targetId: string | null;
+}
+
+type SaveChoiceDraftAction =
+  | { type: 'reset'; draft: SaveChoiceDraft }
+  | { type: 'setMode'; mode: SaveChoiceMode }
+  | { type: 'setName'; name: string }
+  | { type: 'setTargetId'; targetId: string | null };
+
+const saveChoiceDraftReducer = (state: SaveChoiceDraft, action: SaveChoiceDraftAction): SaveChoiceDraft => {
+  switch (action.type) {
+    case 'reset':
+      return action.draft;
+    case 'setMode':
+      return { ...state, mode: action.mode };
+    case 'setName':
+      return { ...state, name: action.name };
+    case 'setTargetId':
+      return { ...state, targetId: action.targetId };
+    default:
+      return state;
+  }
+};
+
+const createSaveChoiceDraft = (
+  overwriteAvailable: boolean,
+  initialName: string,
+  targetId: string | null,
+): SaveChoiceDraft => ({
+  mode: overwriteAvailable ? 'overwrite' : 'create',
+  name: initialName,
+  targetId,
+});
+
+const SAVE_CHOICE_DETAIL_TAG_STYLE: React.CSSProperties = {
+  maxWidth: '100%',
+  color: '#6f6962',
+  background: '#faf7f1',
+  borderRadius: 4,
+  padding: '2px 6px',
+  fontSize: 12,
+  lineHeight: 1.45,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
 export const SaveChoiceModal: React.FC<SaveChoiceModalProps> = ({
   open,
   title,
@@ -49,12 +99,20 @@ export const SaveChoiceModal: React.FC<SaveChoiceModalProps> = ({
   onCancel,
   onConfirm,
 }) => {
-  const [mode, setMode] = useState<SaveChoiceMode | null>(null);
-  const [name, setName] = useState(initialName);
-  const [targetId, setTargetId] = useState<string | null>(initialOverwriteTargetId);
-  const selectedMode: SaveChoiceMode = mode ?? (overwriteAvailable ? 'overwrite' : 'create');
-  const selectedTargetId = targetId || overwriteTargets[0]?.value || null;
-  const overwriteTargetValuesKey = overwriteTargets.map((target) => target.value).join('|');
+  const overwriteTargetValues = overwriteTargets.map((target) => target.value);
+  const overwriteTargetValueSet = new Set(overwriteTargetValues);
+  const fallbackTargetId = overwriteTargetValues[0] || null;
+  const resolvedInitialTargetId = (
+    initialOverwriteTargetId && overwriteTargetValueSet.has(initialOverwriteTargetId)
+      ? initialOverwriteTargetId
+      : fallbackTargetId
+  );
+  const overwriteTargetValuesSignature = JSON.stringify(overwriteTargetValues);
+  const [draft, dispatchDraft] = useReducer(
+    saveChoiceDraftReducer,
+    createSaveChoiceDraft(overwriteAvailable, initialName, resolvedInitialTargetId),
+  );
+  const selectedTargetId = draft.targetId || fallbackTargetId;
   const selectOptions = overwriteTargets.map((target) => ({
     value: target.value,
     label: target.label,
@@ -62,18 +120,15 @@ export const SaveChoiceModal: React.FC<SaveChoiceModalProps> = ({
 
   useLayoutEffect(() => {
     if (!open) return;
-    setMode(overwriteAvailable ? 'overwrite' : 'create');
-    setName(initialName);
-    setTargetId(
-      initialOverwriteTargetId && overwriteTargets.some((target) => target.value === initialOverwriteTargetId)
-        ? initialOverwriteTargetId
-        : overwriteTargets[0]?.value || null,
-    );
-  }, [initialName, initialOverwriteTargetId, open, overwriteAvailable, overwriteTargetValuesKey]);
+    dispatchDraft({
+      type: 'reset',
+      draft: createSaveChoiceDraft(overwriteAvailable, initialName, resolvedInitialTargetId),
+    });
+  }, [initialName, open, overwriteAvailable, overwriteTargetValuesSignature, resolvedInitialTargetId]);
 
   const confirmDisabled = (
-    (selectedMode === 'create' && name.trim() === '') ||
-    (selectedMode === 'overwrite' && overwriteTargets.length > 0 && !selectedTargetId)
+    (draft.mode === 'create' && draft.name.trim() === '') ||
+    (draft.mode === 'overwrite' && overwriteTargets.length > 0 && !selectedTargetId)
   );
 
   return (
@@ -87,13 +142,13 @@ export const SaveChoiceModal: React.FC<SaveChoiceModalProps> = ({
       confirmLoading={loading}
       okButtonProps={{ disabled: confirmDisabled }}
       onCancel={onCancel}
-      onOk={() => onConfirm({ mode: selectedMode, name: name.trim(), targetId: selectedTargetId })}
+      onOk={() => onConfirm({ mode: draft.mode, name: draft.name.trim(), targetId: selectedTargetId })}
       styles={{ body: { paddingTop: 12 } }}
     >
       <Space orientation="vertical" size={14} style={{ width: '100%' }}>
         <Radio.Group
-          value={selectedMode}
-          onChange={(event) => setMode(event.target.value)}
+          value={draft.mode}
+          onChange={(event) => dispatchDraft({ type: 'setMode', mode: event.target.value })}
           style={{ display: 'grid', gap: 8 }}
         >
           <Radio value="create">{createLabel}</Radio>
@@ -102,19 +157,19 @@ export const SaveChoiceModal: React.FC<SaveChoiceModalProps> = ({
         {!overwriteAvailable && (
           <Alert type="info" showIcon message={unavailableOverwriteText} />
         )}
-        {selectedMode === 'create' && (
+        {draft.mode === 'create' && (
           <label style={{ display: 'grid', gap: 6, color: '#33312e', fontWeight: 600 }}>
             {nameLabel}
             <Input
               aria-label={nameLabel}
-              value={name}
+              value={draft.name}
               maxLength={80}
               placeholder={`请输入${nameLabel}`}
-              onChange={(event) => setName(event.target.value)}
+              onChange={(event) => dispatchDraft({ type: 'setName', name: event.target.value })}
             />
           </label>
         )}
-        {selectedMode === 'overwrite' && overwriteTargets.length > 0 && (
+        {draft.mode === 'overwrite' && overwriteTargets.length > 0 && (
           <label style={{ display: 'grid', gap: 6, color: '#33312e', fontWeight: 600 }}>
             {overwriteTargetLabel}
             <Select
@@ -140,18 +195,7 @@ export const SaveChoiceModal: React.FC<SaveChoiceModalProps> = ({
                         {target.details.slice(0, 4).map((detail) => (
                           <span
                             key={detail}
-                            style={{
-                              maxWidth: '100%',
-                              color: '#6f6962',
-                              background: '#faf7f1',
-                              borderRadius: 4,
-                              padding: '2px 6px',
-                              fontSize: 12,
-                              lineHeight: 1.45,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
+                            style={SAVE_CHOICE_DETAIL_TAG_STYLE}
                           >
                             {detail}
                           </span>
@@ -161,7 +205,7 @@ export const SaveChoiceModal: React.FC<SaveChoiceModalProps> = ({
                   </div>
                 );
               }}
-              onChange={(value) => setTargetId(value)}
+              onChange={(value) => dispatchDraft({ type: 'setTargetId', targetId: value })}
             />
           </label>
         )}

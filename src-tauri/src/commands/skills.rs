@@ -23,6 +23,14 @@ const BUILTIN_SKILL_NAMES: &[&str] = &[
     "fanqie-short-qianjin-writer",
     "fanqie-short-xitong-outline",
     "fanqie-short-xitong-writer",
+    "fanqie-long-xianxia-outline",
+    "fanqie-long-xianxia-writer",
+    "fanqie-long-xifang-outline",
+    "fanqie-long-xifang-writer",
+    "fanqie-long-lishi-outline",
+    "fanqie-long-lishi-writer",
+    "fanqie-long-youxi-outline",
+    "fanqie-long-youxi-writer",
 ];
 
 static BUILTIN_SKILLS_SYNCED: OnceLock<()> = OnceLock::new();
@@ -229,4 +237,69 @@ pub fn delete_skill(app: AppHandle, name: String) -> Result<(), String> {
 #[tauri::command]
 pub fn get_skills(app: AppHandle) -> Result<Vec<SkillDefinition>, String> {
     Ok(discover_skills(Some(&app)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    const LONG_FORM_SKILLS: &[&str] = &[
+        "fanqie-long-xianxia-outline",
+        "fanqie-long-xianxia-writer",
+        "fanqie-long-xifang-outline",
+        "fanqie-long-xifang-writer",
+        "fanqie-long-lishi-outline",
+        "fanqie-long-lishi-writer",
+        "fanqie-long-youxi-outline",
+        "fanqie-long-youxi-writer",
+    ];
+
+    fn resource_skills_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("skills")
+    }
+
+    #[test]
+    fn long_form_skills_are_complete_builtin_resources() {
+        let source_dir = resource_skills_dir();
+
+        for skill_name in LONG_FORM_SKILLS {
+            assert!(BUILTIN_SKILL_NAMES.contains(skill_name));
+            let skill_dir = source_dir.join(skill_name);
+            assert!(skill_dir.join("SKILL.md").is_file(), "{} 缺少 SKILL.md", skill_name);
+            assert!(skill_dir.join("agents/openai.yaml").is_file(), "{} 缺少 agents/openai.yaml", skill_name);
+            assert!(skill_dir.join("references").is_dir(), "{} 缺少 references 目录", skill_name);
+        }
+    }
+
+    #[test]
+    fn long_form_skills_can_be_discovered_and_copied_with_supporting_files() {
+        let source_dir = resource_skills_dir();
+        let mut discovered = Vec::new();
+        collect_skills_from_root(&source_dir, &mut discovered);
+        let discovered_names: Vec<&str> = discovered.iter().map(|skill| skill.name.as_str()).collect();
+
+        for skill_name in LONG_FORM_SKILLS {
+            assert!(discovered_names.contains(skill_name), "未发现 {}", skill_name);
+        }
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("系统时间异常")
+            .as_nanos();
+        let temp = std::env::temp_dir().join(format!("museai-skill-copy-test-{}", unique));
+        for skill_name in LONG_FORM_SKILLS {
+            let destination = temp.join(skill_name);
+            copy_dir_recursive(&source_dir.join(skill_name), &destination).expect("复制 Skill 失败");
+            assert!(destination.join("SKILL.md").is_file());
+            assert!(destination.join("agents/openai.yaml").is_file());
+            assert!(WalkDir::new(destination.join("references"))
+                .into_iter()
+                .flatten()
+                .any(|entry| entry.path().is_file()));
+        }
+        fs::remove_dir_all(temp).expect("清理临时目录失败");
+    }
 }

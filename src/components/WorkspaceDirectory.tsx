@@ -195,12 +195,13 @@ const useWorkspaceFiles = (
 
   const loadFiles = useCallback(async (keys: React.Key[]) => {
     try {
+      const expandedKeySet = new Set(keys);
       const referenceRootDir: string = await invoke('get_workspace_dir', { dirType });
       patchUiState({ rootDir: referenceRootDir });
       const rootItems: FileNode[] = await invoke('list_dir', { path: referenceRootDir });
 
       const fetchChildren = async (items: FileNode[]): Promise<FileNode[]> => Promise.all(items.map(async (item) => {
-        if (item.is_dir && keys.includes(item.path)) {
+        if (item.is_dir && expandedKeySet.has(item.path)) {
           try {
             const children = await invoke<FileNode[]>('list_dir', { path: item.path });
             item.children = await fetchChildren(children.filter((child) => child.name !== '.versions'));

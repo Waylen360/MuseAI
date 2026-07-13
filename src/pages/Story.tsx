@@ -39,6 +39,7 @@ import { createStableContentKey } from '../utils/renderKeys';
 import { StylePresetSelector } from '../components/StylePresetSelector';
 import { useStylePresetStore } from '../stores/useStylePresetStore';
 import { prependStylePresets } from '../utils/stylePresets';
+import { buildBookTravelCharacterDetails } from '../utils/bookTravelSaveDetails';
 
 interface ChatStreamEvent {
   runId: string;
@@ -1527,11 +1528,11 @@ const useStoryView = () => {
         overwriteTargets={bookTravelStore.savedProgresses.map((progress) => {
           const material = resolveBookTravelProgressMaterial(progress, bookTravelStore.assembledMaterials);
           const worldBookTitle = progress.snapshot.selectedWorldBook?.title || material?.materials.worldBook.title || null;
-          const characterNames = (
+          const characterDetails = buildBookTravelCharacterDetails(
             progress.snapshot.selectedCharacterCards.length > 0
               ? progress.snapshot.selectedCharacterCards
               : material?.materials.characterCards || []
-          ).map((card) => card.title).filter(Boolean);
+          );
           return {
             value: progress.id,
             label: progress.title || '未命名进度',
@@ -1539,9 +1540,7 @@ const useStoryView = () => {
             details: [
               `穿书素材：${material?.title || '未匹配穿书素材'}`,
               worldBookTitle ? `世界书：${worldBookTitle}` : '未绑定世界书',
-              ...(characterNames.length > 0
-                ? characterNames.slice(0, 3).map((name) => `角色卡：${name}`)
-                : ['未绑定角色卡']),
+              ...characterDetails,
             ],
           };
         })}
