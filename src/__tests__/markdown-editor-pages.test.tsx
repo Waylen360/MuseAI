@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { invoke } from '@tauri-apps/api/core';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -38,7 +38,12 @@ describe('Markdown editor page integration', () => {
       return undefined;
     });
     useWorksStore.setState({ selectedFile: '/Users/test/Documents/MuseAI/articles/work.md' });
-    useOutlineStore.setState({ selectedOutlineFile: '/Users/test/Documents/MuseAI/outline/outline.md' });
+    useOutlineStore.setState({
+      selectedOutlineFile: '/Users/test/Documents/MuseAI/outline/outline.md',
+      fileTreeWidth: 280,
+      agentWidth: 420,
+      isAgentVisible: true,
+    });
     useDeAiStore.setState({
       selectedWorkFile: '/Users/test/Documents/MuseAI/articles/de-ai.md',
       selectedReferenceFile: '/Users/test/Documents/MuseAI/references/example.md',
@@ -69,6 +74,60 @@ describe('Markdown editor page integration', () => {
     );
     expect(screen.getByRole('separator', { name: '调整文件树宽度' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '大纲评分暂无' })).toBeInTheDocument();
+  });
+
+  it('keeps Outline divider drags mutually exclusive and clamps both widths', () => {
+    render(
+      <MemoryRouter>
+        <Outline />
+      </MemoryRouter>
+    );
+
+    const fileTreeSeparator = screen.getByRole('separator', { name: '调整文件树宽度' });
+    const agentSeparator = screen.getByRole('separator', { name: '调整 Agent 宽度' });
+
+    fireEvent.mouseDown(fileTreeSeparator);
+    expect(document.body.style.cursor).toBe('col-resize');
+    expect(document.body.style.userSelect).toBe('none');
+
+    fireEvent.mouseMove(window, { clientX: 100 });
+    expect(useOutlineStore.getState().fileTreeWidth).toBe(250);
+    fireEvent.mouseMove(window, { clientX: 1000 });
+    expect(useOutlineStore.getState().fileTreeWidth).toBe(420);
+
+    fireEvent.mouseDown(agentSeparator);
+    fireEvent.mouseMove(window, { clientX: 1000 });
+    expect(useOutlineStore.getState().fileTreeWidth).toBe(420);
+    expect(useOutlineStore.getState().agentWidth).toBe(380);
+
+    fireEvent.mouseMove(window, { clientX: 0 });
+    expect(useOutlineStore.getState().agentWidth).toBe(860);
+
+    fireEvent.mouseUp(window);
+    expect(document.body.style.cursor).toBe('');
+    expect(document.body.style.userSelect).toBe('');
+
+    fireEvent.mouseMove(window, { clientX: 600 });
+    expect(useOutlineStore.getState().agentWidth).toBe(860);
+  });
+
+  it('cleans up an active Outline drag when the page unmounts', () => {
+    const { unmount } = render(
+      <MemoryRouter>
+        <Outline />
+      </MemoryRouter>
+    );
+
+    fireEvent.mouseDown(screen.getByRole('separator', { name: '调整文件树宽度' }));
+    fireEvent.mouseMove(window, { clientX: 360 });
+    expect(useOutlineStore.getState().fileTreeWidth).toBe(360);
+
+    unmount();
+    expect(document.body.style.cursor).toBe('');
+    expect(document.body.style.userSelect).toBe('');
+
+    fireEvent.mouseMove(window, { clientX: 260 });
+    expect(useOutlineStore.getState().fileTreeWidth).toBe(360);
   });
 
   it('mounts the shared editor on the De-AI page', () => {

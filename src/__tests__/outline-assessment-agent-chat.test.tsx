@@ -11,9 +11,10 @@ type StreamPayload = {
 
 let streamListener: ((event: { payload: StreamPayload }) => void) | null = null;
 let runCounter = 0;
+let listenCount = 0;
 
-const invokeMock = vi.fn(async (command: string, _args?: unknown) => {
-  if (command === 'get_workspace_dir') return '/Users/test/Documents/MuseAI/outline';
+const invokeMock = vi.fn(async (command: string, args?: { dirType?: string }) => {
+  if (command === 'get_workspace_dir') return `/Users/test/Documents/MuseAI/${args?.dirType ?? 'outline'}`;
   if (command === 'build_full_system_prompt') return '完整系统提示词';
   if (command === 'start_chat_completion_stream') {
     runCounter += 1;
@@ -23,11 +24,12 @@ const invokeMock = vi.fn(async (command: string, _args?: unknown) => {
 });
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (command: string, args?: unknown) => invokeMock(command, args),
+  invoke: (command: string, args?: unknown) => invokeMock(command, args as { dirType?: string } | undefined),
 }));
 
 vi.mock('@tauri-apps/api/event', () => ({
   listen: async (_event: string, handler: (event: { payload: StreamPayload }) => void) => {
+    listenCount += 1;
     streamListener = handler;
     return () => {
       streamListener = null;
@@ -38,9 +40,11 @@ vi.mock('@tauri-apps/api/event', () => ({
 function Harness({
   onBeforeStart,
   onDone,
+  workspaceDirType,
 }: {
   onBeforeStart: () => Promise<{ content: string; allowedWritePaths?: string[] }>;
   onDone: (lastAgentMessage: string) => string | void;
+  workspaceDirType?: 'articles' | 'outline';
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeRun, setActiveRun] = useState<{ runId: string | null; messageId: string | null }>({
@@ -64,6 +68,7 @@ function Harness({
       onRunningChange={setIsRunning}
       onBeforeStart={onBeforeStart}
       onDone={onDone}
+      workspaceDirType={workspaceDirType}
     />
   );
 }
@@ -72,6 +77,7 @@ describe('OutlineAssessmentAgentChat', () => {
   beforeEach(() => {
     streamListener = null;
     runCounter = 0;
+    listenCount = 0;
     invokeMock.mockClear();
   });
 
@@ -120,6 +126,59 @@ describe('OutlineAssessmentAgentChat', () => {
           }),
         }),
       ]);
+    });
+  });
+
+  it('uses the latest committed completion callback without duplicating the stream listener', async () => {
+    const onBeforeStart = vi.fn(async () => ({ content: '请分析大纲: outline.md' }));
+    const initialOnDone = vi.fn(() => undefined);
+    const latestOnDone = vi.fn(() => '请使用最新规则重试');
+
+    const { rerender } = render(<Harness onBeforeStart={onBeforeStart} onDone={initialOnDone} />);
+    fireEvent.click(screen.getByRole('button', { name: '开始' }));
+
+    await waitFor(() => {
+      expect(streamListener).not.toBeNull();
+      expect(runCounter).toBe(1);
+    });
+
+    rerender(<Harness onBeforeStart={onBeforeStart} onDone={latestOnDone} />);
+
+    await act(async () => {
+      streamListener?.({ payload: { runId: 'run-1', eventType: 'done' } });
+    });
+
+    await waitFor(() => {
+      expect(initialOnDone).not.toHaveBeenCalled();
+      expect(latestOnDone).toHaveBeenCalledTimes(1);
+      expect(runCounter).toBe(2);
+      expect(listenCount).toBe(1);
+    });
+  });
+
+  it('rebuilds the system prompt with the latest workspace directory type', async () => {
+    const onBeforeStart = vi.fn(async () => ({ content: '开始' }));
+    const onDone = vi.fn(() => undefined);
+    const { rerender } = render(
+      <Harness onBeforeStart={onBeforeStart} onDone={onDone} workspaceDirType="articles" />,
+    );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('get_workspace_dir', { dirType: 'articles' });
+      expect(invokeMock).toHaveBeenCalledWith(
+        'build_full_system_prompt',
+        expect.objectContaining({ workspacePath: '/Users/test/Documents/MuseAI/articles' }),
+      );
+    });
+
+    rerender(<Harness onBeforeStart={onBeforeStart} onDone={onDone} workspaceDirType="outline" />);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('get_workspace_dir', { dirType: 'outline' });
+      expect(invokeMock).toHaveBeenCalledWith(
+        'build_full_system_prompt',
+        expect.objectContaining({ workspacePath: '/Users/test/Documents/MuseAI/outline' }),
+      );
     });
   });
 });

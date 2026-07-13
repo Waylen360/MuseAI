@@ -38,10 +38,9 @@ const getVersionPath = (workPath: string, versionId: string) => {
 const Outline: React.FC = () => {
   const [scoreModalFile, setScoreModalFile] = useState<string | null>(null);
   const [isReverseOutlineOpen, setIsReverseOutlineOpen] = useState(false);
+  const [activeResize, setActiveResize] = useState<'fileTree' | 'agent' | null>(null);
 
   const fileTreeRef = useRef<HTMLDivElement>(null);
-  const fileTreeResizeCleanupRef = useRef<(() => void) | null>(null);
-  const agentResizeCleanupRef = useRef<(() => void) | null>(null);
   const {
     selectedOutlineFile,
     setSelectedOutlineFile,
@@ -102,63 +101,42 @@ const Outline: React.FC = () => {
     }
   }, [selectedOutlineFile, setVersions, setActiveVersionId, syncActiveVersionResult]);
 
-  const stopFileTreeResize = useCallback(() => {
-    fileTreeResizeCleanupRef.current?.();
-    fileTreeResizeCleanupRef.current = null;
-  }, []);
-
-  const stopAgentResize = useCallback(() => {
-    agentResizeCleanupRef.current?.();
-    agentResizeCleanupRef.current = null;
-  }, []);
-
   const startFileTreeResize = useCallback(() => {
-    if (fileTreeResizeCleanupRef.current) return;
-    stopAgentResize();
-    const handleMouseMove = (event: MouseEvent) => {
-      const fileTreeLeft = fileTreeRef.current?.getBoundingClientRect().left ?? 0;
-      const nextWidth = Math.min(Math.max(event.clientX - fileTreeLeft, MIN_FILE_TREE_WIDTH), MAX_FILE_TREE_WIDTH);
-      setFileTreeWidth(nextWidth);
-    };
-    const handleMouseUp = () => stopFileTreeResize();
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-    fileTreeResizeCleanupRef.current = () => {
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [setFileTreeWidth, stopAgentResize, stopFileTreeResize]);
+    setActiveResize('fileTree');
+  }, []);
 
   const startAgentResize = useCallback(() => {
-    if (agentResizeCleanupRef.current) return;
-    stopFileTreeResize();
+    setActiveResize('agent');
+  }, []);
+
+  useEffect(() => {
+    if (!activeResize) return undefined;
+
     const handleMouseMove = (event: MouseEvent) => {
-      // agent is on the right, so we calculate from the right edge
-      const windowWidth = window.innerWidth;
-      const nextWidth = Math.min(Math.max(windowWidth - event.clientX, MIN_AGENT_WIDTH), MAX_AGENT_WIDTH);
+      if (activeResize === 'fileTree') {
+        const fileTreeLeft = fileTreeRef.current?.getBoundingClientRect().left ?? 0;
+        const nextWidth = Math.min(Math.max(event.clientX - fileTreeLeft, MIN_FILE_TREE_WIDTH), MAX_FILE_TREE_WIDTH);
+        setFileTreeWidth(nextWidth);
+        return;
+      }
+
+      const nextWidth = Math.min(Math.max(window.innerWidth - event.clientX, MIN_AGENT_WIDTH), MAX_AGENT_WIDTH);
       setAgentWidth(nextWidth);
     };
-    const handleMouseUp = () => stopAgentResize();
+    const handleMouseUp = () => setActiveResize(null);
+
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
-    agentResizeCleanupRef.current = () => {
+
+    return () => {
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [setAgentWidth, stopAgentResize, stopFileTreeResize]);
-
-  useEffect(() => () => {
-    stopFileTreeResize();
-    stopAgentResize();
-  }, [stopAgentResize, stopFileTreeResize]);
+  }, [activeResize, setAgentWidth, setFileTreeWidth]);
 
   let parsedAssessment: any = null;
   let totalScore = 0;

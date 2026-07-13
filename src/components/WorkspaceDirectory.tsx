@@ -221,7 +221,10 @@ const useWorkspaceFiles = (
   }, [dirType, patchUiState]);
 
   const loadFilesRef = useRef(loadFiles);
-  loadFilesRef.current = loadFiles;
+
+  useEffect(() => {
+    loadFilesRef.current = loadFiles;
+  }, [loadFiles]);
 
   useEffect(() => {
     void loadFiles(expandedKeysRef.current);

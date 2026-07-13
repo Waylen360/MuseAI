@@ -64,7 +64,6 @@ const useOutlineAssessmentAgentChatView = ({
   isRunning,
   onRunningChange
 }: OutlineAssessmentAgentChatProps) => {
-  const resolvedWorkspaceDirType = workspaceDirType ?? 'outline';
   const [expandedBlocks, setExpandedBlocks] = useState<Record<string, boolean>>({});
   const stopRequestedRef = useRef(false);
   const currentThinkingIdRef = useRef<string | null>(null);
@@ -79,9 +78,10 @@ const useOutlineAssessmentAgentChatView = ({
   const [fullSystemPrompt, setFullSystemPrompt] = useState('');
 
   useEffect(() => {
+    const effectiveWorkspaceDirType = workspaceDirType ?? 'outline';
     const build = async () => {
       try {
-        const workspaceDir = await invoke<string>('get_workspace_dir', { dirType: resolvedWorkspaceDirType });
+        const workspaceDir = await invoke<string>('get_workspace_dir', { dirType: effectiveWorkspaceDirType });
         const full = await invoke<string>('build_full_system_prompt', {
           systemPrompt,
           workspacePath: workspaceDir,
@@ -93,7 +93,7 @@ const useOutlineAssessmentAgentChatView = ({
       }
     };
     build();
-  }, [systemPrompt, resolvedWorkspaceDirType]);
+  }, [systemPrompt, workspaceDirType]);
 
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { activeRunRef.current = activeRun; }, [activeRun]);
@@ -323,7 +323,8 @@ const useOutlineAssessmentAgentChatView = ({
     scrollToBottomOnce();
 
     try {
-      const workspaceDir = await invoke<string>('get_workspace_dir', { dirType: resolvedWorkspaceDirType });
+      const effectiveWorkspaceDirType = workspaceDirType ?? 'outline';
+      const workspaceDir = await invoke<string>('get_workspace_dir', { dirType: effectiveWorkspaceDirType });
       const runId = await invoke<string>('start_chat_completion_stream', {
         request: {
           modelInterface: settings.modelInterface,
@@ -366,7 +367,9 @@ const useOutlineAssessmentAgentChatView = ({
     }
   };
 
-  handleSendRef.current = handleSend;
+  useEffect(() => {
+    handleSendRef.current = handleSend;
+  });
 
   const handleStop = async () => {
     stopRequestedRef.current = true;

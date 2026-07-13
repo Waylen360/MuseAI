@@ -43,6 +43,7 @@ import {
   defaultChatArchivePrompt,
   defaultStoryArchivePrompt,
   defaultSillyTavernExporterPrompt,
+  type AgentConfig,
 } from '../stores/useSettingsStore';
 import { SettingsConcurrencyCard } from '../components/SettingsConcurrencyCard';
 
@@ -123,6 +124,39 @@ interface AgentSettingCardProps {
   showModelControls?: boolean;
 }
 
+interface BuildAgentFormValuesOptions {
+  config: AgentConfig;
+  defaultConfig: AgentConfig;
+  prompt: string;
+  supportsCompactionTurnThreshold: boolean;
+  supportsSamplingControls: boolean;
+}
+
+const buildAgentFormValues = ({
+  config,
+  defaultConfig,
+  prompt,
+  supportsCompactionTurnThreshold,
+  supportsSamplingControls,
+}: BuildAgentFormValuesOptions) => {
+  const values: Record<string, unknown> = {
+    temperature: config.temperature ?? defaultConfig.temperature ?? 0.3,
+    maxOutputTokens: config.maxOutputTokens ?? defaultConfig.maxOutputTokens ?? 32000,
+    maxContextTokens: config.maxContextTokens ?? defaultConfig.maxContextTokens ?? 200000,
+    thinkingDepth: config.thinkingDepth ?? defaultConfig.thinkingDepth ?? 'off',
+    prompt,
+  };
+  if (supportsCompactionTurnThreshold) {
+    values.compactionTurnThreshold = config.compactionTurnThreshold ?? defaultConfig.compactionTurnThreshold ?? 20;
+  }
+  if (supportsSamplingControls) {
+    values.frequencyPenalty = config.frequencyPenalty ?? defaultConfig.frequencyPenalty ?? 0.3;
+    values.presencePenalty = config.presencePenalty ?? defaultConfig.presencePenalty ?? 0.2;
+    values.topP = config.topP ?? defaultConfig.topP ?? 0.9;
+  }
+  return values;
+};
+
 const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
   title,
   agentId,
@@ -140,29 +174,13 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
   const supportsCompactionTurnThreshold = agentId === 'partnerChat' || agentId === 'storyAgent' || agentId === 'storyDynamicAgent';
   const supportsSamplingControls = supportsCompactionTurnThreshold;
 
-  const buildFormValues = React.useCallback((config: typeof defaultConfig, prompt: string) => {
-    const values: Record<string, unknown> = {
-      temperature: config.temperature ?? defaultConfig.temperature ?? 0.3,
-      maxOutputTokens: config.maxOutputTokens ?? defaultConfig.maxOutputTokens ?? 32000,
-      maxContextTokens: config.maxContextTokens ?? defaultConfig.maxContextTokens ?? 200000,
-      thinkingDepth: config.thinkingDepth ?? defaultConfig.thinkingDepth ?? 'off',
-      prompt,
-    };
-    if (supportsCompactionTurnThreshold) {
-      values.compactionTurnThreshold = config.compactionTurnThreshold ?? defaultConfig.compactionTurnThreshold ?? 20;
-    }
-    if (supportsSamplingControls) {
-      values.frequencyPenalty = config.frequencyPenalty ?? defaultConfig.frequencyPenalty ?? 0.3;
-      values.presencePenalty = config.presencePenalty ?? defaultConfig.presencePenalty ?? 0.2;
-      values.topP = config.topP ?? defaultConfig.topP ?? 0.9;
-    }
-    return values;
-  }, [defaultConfig, supportsCompactionTurnThreshold, supportsSamplingControls]);
-
-  const initialFormValues = React.useMemo(
-    () => buildFormValues(agentConfig, currentPrompt),
-    [agentConfig, buildFormValues, currentPrompt],
-  );
+  const initialFormValues = buildAgentFormValues({
+    config: agentConfig,
+    defaultConfig,
+    prompt: currentPrompt,
+    supportsCompactionTurnThreshold,
+    supportsSamplingControls,
+  });
 
   const handleSave = (values: any) => {
     if (showModelControls) {
@@ -185,7 +203,13 @@ const AgentSettingCard: React.FC<AgentSettingCardProps> = ({
   };
 
   const handleReset = () => {
-    const values = buildFormValues(defaultConfig, defaultPrompt);
+    const values = buildAgentFormValues({
+      config: defaultConfig,
+      defaultConfig,
+      prompt: defaultPrompt,
+      supportsCompactionTurnThreshold,
+      supportsSamplingControls,
+    });
     form.setFieldsValue(values);
     if (showModelControls) {
       const nextConfig = {

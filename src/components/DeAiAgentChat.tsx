@@ -541,7 +541,9 @@ const useDeAiAgentChatView = ({
     }
   };
 
-  handleSendRef.current = handleSend;
+  useEffect(() => {
+    handleSendRef.current = handleSend;
+  });
 
   const handleStop = async () => {
     stopRequestedRef.current = true;
